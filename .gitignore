@@ -55,3 +55,6 @@ manual-sa-kubeconfig.yaml
 # Build artifacts
 dist/
 build/
+
+# Claude Code local settings
+.claude/
