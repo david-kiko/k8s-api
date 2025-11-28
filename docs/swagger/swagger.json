@@ -1,0 +1,280 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Kubernetes资源管理API，支持动态创建开发环境和SA权限管理",
+        "title": "K8S Resource API",
+        "termsOfService": "http://swagger.io/terms/",
+        "contact": {
+            "name": "API Support",
+            "url": "http://www.swagger.io/support",
+            "email": "support@swagger.io"
+        },
+        "license": {
+            "name": "Apache 2.0",
+            "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/api/v1/k8s",
+    "paths": {
+        "/dev-env": {
+            "post": {
+                "description": "基于demo-service.yaml创建完整的K8s开发环境，包括PVC、Deployment和Service",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "dev-env"
+                ],
+                "summary": "创建开发环境",
+                "parameters": [
+                    {
+                        "description": "创建开发环境请求",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.CreateDevEnvironmentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/main.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/kubeconfig/{serviceAccount}": {
+            "get": {
+                "description": "返回指定SA的kubeconfig，如果SA不存在则创建SA并分配权限",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "kubeconfig"
+                ],
+                "summary": "获取ServiceAccount的kubeconfig",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "ServiceAccount名称",
+                        "name": "serviceAccount",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "用于操作的kubeconfig内容",
+                        "name": "kubeconfig",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "default": "default",
+                        "description": "SA所在的namespace",
+                        "name": "namespace",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "如果SA不存在是否创建",
+                        "name": "create_if_not_exists",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "默认资源配额",
+                        "name": "resource_quota",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/main.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "main.APIResponse": {
+            "type": "object",
+            "properties": {
+                "data": {},
+                "message": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "main.CreateDevEnvironmentRequest": {
+            "type": "object",
+            "required": [
+                "kubeconfig",
+                "name",
+                "namespace",
+                "nodeports",
+                "resources",
+                "sa_name",
+                "storage"
+            ],
+            "properties": {
+                "kubeconfig": {
+                    "type": "string",
+                    "example": "apiVersion: v1\nkind: Config\n..."
+                },
+                "name": {
+                    "type": "string",
+                    "example": "demo"
+                },
+                "namespace": {
+                    "type": "string",
+                    "example": "dev-space"
+                },
+                "nodeports": {
+                    "type": "object",
+                    "required": [
+                        "ssh",
+                        "terminal",
+                        "vscode"
+                    ],
+                    "properties": {
+                        "ssh": {
+                            "type": "integer",
+                            "example": 31496
+                        },
+                        "terminal": {
+                            "type": "integer",
+                            "example": 32259
+                        },
+                        "vscode": {
+                            "type": "integer",
+                            "example": 30582
+                        }
+                    }
+                },
+                "resources": {
+                    "type": "object",
+                    "required": [
+                        "cpu",
+                        "cpu_limit",
+                        "memory",
+                        "memory_limit"
+                    ],
+                    "properties": {
+                        "cpu": {
+                            "type": "string",
+                            "example": "1000m"
+                        },
+                        "cpu_limit": {
+                            "type": "string",
+                            "example": "2000m"
+                        },
+                        "memory": {
+                            "type": "string",
+                            "example": "2Gi"
+                        },
+                        "memory_limit": {
+                            "type": "string",
+                            "example": "4Gi"
+                        }
+                    }
+                },
+                "sa_name": {
+                    "type": "string",
+                    "example": "dev-user"
+                },
+                "storage": {
+                    "type": "object",
+                    "required": [
+                        "vscode",
+                        "workspace"
+                    ],
+                    "properties": {
+                        "vscode": {
+                            "type": "string",
+                            "example": "5Gi"
+                        },
+                        "workspace": {
+                            "type": "string",
+                            "example": "10Gi"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}

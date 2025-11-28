@@ -1,0 +1,360 @@
+basePath: /api/v1/k8s
+definitions:
+  main.APIResponse:
+    properties:
+      data: {}
+      message:
+        type: string
+      success:
+        type: boolean
+    type: object
+  main.CreateEnvironmentRequest:
+    properties:
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      name:
+        example: demo
+        type: string
+      namespace:
+        example: dev-space
+        type: string
+      nodeports:
+        properties:
+          ssh:
+            example: 31496
+            type: integer
+          terminal:
+            example: 32259
+            type: integer
+          vscode:
+            example: 30582
+            type: integer
+        required:
+        - ssh
+        - terminal
+        - vscode
+        type: object
+      resources:
+        properties:
+          cpu:
+            example: 1000m
+            type: string
+          cpu_limit:
+            example: 2000m
+            type: string
+          memory:
+            example: 2Gi
+            type: string
+          memory_limit:
+            example: 4Gi
+            type: string
+        required:
+        - cpu
+        - cpu_limit
+        - memory
+        - memory_limit
+        type: object
+      storage:
+        properties:
+          vscode:
+            example: 5Gi
+            type: string
+          workspace:
+            example: 10Gi
+            type: string
+        required:
+        - vscode
+        - workspace
+        type: object
+    required:
+    - kubeconfig
+    - name
+    - nodeports
+    - resources
+    - storage
+    type: object
+  main.DeleteEnvironmentRequest:
+    properties:
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      namespace:
+        example: dev-space
+        type: string
+    required:
+    - kubeconfig
+    - namespace
+    type: object
+  main.DeleteServiceAccountRequest:
+    properties:
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      namespace:
+        example: dev-space
+        type: string
+    required:
+    - kubeconfig
+    - namespace
+    type: object
+  main.GetEnvironmentRequest:
+    properties:
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      namespace:
+        example: dev-space
+        type: string
+    required:
+    - kubeconfig
+    - namespace
+    type: object
+  main.KubeconfigRequest:
+    properties:
+      create_if_not_exists:
+        example: true
+        type: boolean
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      namespace:
+        example: default
+        type: string
+      resource_limits:
+        properties:
+          cpu:
+            example: "8"
+            type: string
+          memory:
+            example: 16Gi
+            type: string
+          pod_count:
+            example: "2"
+            type: string
+          storage:
+            example: 20Gi
+            type: string
+        type: object
+      sa_name:
+        example: dev-user
+        type: string
+    required:
+    - kubeconfig
+    - sa_name
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: Kubernetes资源管理API，支持动态创建开发环境和SA权限管理
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: K8S Resource API
+  version: "1.0"
+paths:
+  /environments:
+    post:
+      consumes:
+      - application/json
+      description: 基于ServiceAccount的kubeconfig创建完整的K8s环境，包括PVC、Deployment和Service。使用传入的kubeconfig中的身份信息
+      parameters:
+      - description: 创建环境请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.CreateEnvironmentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/main.APIResponse'
+            - properties:
+                data:
+                  type: string
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 创建环境
+      tags:
+      - environments
+  /environments/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定名称的环境，包括PVC、Deployment和Service
+      parameters:
+      - description: 环境名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 删除环境请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.DeleteEnvironmentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 删除环境
+      tags:
+      - environments
+    get:
+      consumes:
+      - application/json
+      description: 获取指定名称的环境的状态信息
+      parameters:
+      - description: 环境名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 获取环境信息请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.GetEnvironmentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/main.APIResponse'
+            - properties:
+                data:
+                  additionalProperties: true
+                  type: object
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 获取环境信息
+      tags:
+      - environments
+  /service-accounts:
+    post:
+      consumes:
+      - application/json
+      description: 创建指定的ServiceAccount，分配权限，并返回对应的kubeconfig
+      parameters:
+      - description: 创建ServiceAccount请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.KubeconfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/main.APIResponse'
+            - properties:
+                data:
+                  type: string
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 创建ServiceAccount并返回kubeconfig
+      tags:
+      - service-accounts
+  /service-accounts/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定的ServiceAccount及其相关权限配置（Role、RoleBinding、ResourceQuota）
+      parameters:
+      - description: ServiceAccount名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 删除ServiceAccount请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.DeleteServiceAccountRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 删除ServiceAccount
+      tags:
+      - service-accounts
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

@@ -1,0 +1,192 @@
+basePath: /api/v1/k8s
+definitions:
+  main.APIResponse:
+    properties:
+      data: {}
+      message:
+        type: string
+      success:
+        type: boolean
+    type: object
+  main.CreateDevEnvironmentRequest:
+    properties:
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      name:
+        example: demo
+        type: string
+      namespace:
+        example: dev-space
+        type: string
+      nodeports:
+        properties:
+          ssh:
+            example: 31496
+            type: integer
+          terminal:
+            example: 32259
+            type: integer
+          vscode:
+            example: 30582
+            type: integer
+        required:
+        - ssh
+        - terminal
+        - vscode
+        type: object
+      resources:
+        properties:
+          cpu:
+            example: 1000m
+            type: string
+          cpu_limit:
+            example: 2000m
+            type: string
+          memory:
+            example: 2Gi
+            type: string
+          memory_limit:
+            example: 4Gi
+            type: string
+        required:
+        - cpu
+        - cpu_limit
+        - memory
+        - memory_limit
+        type: object
+      sa_name:
+        example: dev-user
+        type: string
+      storage:
+        properties:
+          vscode:
+            example: 5Gi
+            type: string
+          workspace:
+            example: 10Gi
+            type: string
+        required:
+        - vscode
+        - workspace
+        type: object
+    required:
+    - kubeconfig
+    - name
+    - namespace
+    - nodeports
+    - resources
+    - sa_name
+    - storage
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: Kubernetes资源管理API，支持动态创建开发环境和SA权限管理
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: K8S Resource API
+  version: "1.0"
+paths:
+  /dev-env:
+    post:
+      consumes:
+      - application/json
+      description: 基于demo-service.yaml创建完整的K8s开发环境，包括PVC、Deployment和Service
+      parameters:
+      - description: 创建开发环境请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.CreateDevEnvironmentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/main.APIResponse'
+            - properties:
+                data:
+                  type: string
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 创建开发环境
+      tags:
+      - dev-env
+  /kubeconfig/{serviceAccount}:
+    get:
+      consumes:
+      - application/json
+      description: 返回指定SA的kubeconfig，如果SA不存在则创建SA并分配权限
+      parameters:
+      - description: ServiceAccount名称
+        in: path
+        name: serviceAccount
+        required: true
+        type: string
+      - description: 用于操作的kubeconfig内容
+        in: query
+        name: kubeconfig
+        required: true
+        type: string
+      - default: default
+        description: SA所在的namespace
+        in: query
+        name: namespace
+        type: string
+      - default: true
+        description: 如果SA不存在是否创建
+        in: query
+        name: create_if_not_exists
+        type: boolean
+      - description: 默认资源配额
+        in: query
+        name: resource_quota
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/main.APIResponse'
+            - properties:
+                data:
+                  type: string
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 获取ServiceAccount的kubeconfig
+      tags:
+      - kubeconfig
+securityDefinitions:
+  BearerAuth:
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

@@ -1,0 +1,147 @@
+# Demo Development Environment - Complete Kubernetes Manifests
+# Generated from existing cluster resources
+# Date: 2025-11-27
+
+---
+# PersistentVolumeClaim for Workspace Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: demo-workspace
+  namespace: default
+  labels:
+    app: demo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local
+
+---
+# PersistentVolumeClaim for VSCode Server Storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: demo-vscode
+  namespace: default
+  labels:
+    app: demo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local
+
+---
+# Deployment for Demo Development Environment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo
+  namespace: default
+  labels:
+    app: demo
+    type: dev-env
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo
+  template:
+    metadata:
+      labels:
+        app: demo
+        type: dev-env
+    spec:
+      containers:
+      - name: dev-environment
+        image: registry.opsman.top/kmai/ubuntu:22.04-ide
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080  # VS Code Web Interface
+        - containerPort: 22    # SSH
+        - containerPort: 7681  # Web Terminal
+        env:
+        - name: ACCESS_PASSWORD
+          value: "8Dd8dw8k"
+        - name: ROOT_PASSWORD
+          value: "8Dd8dw8k"
+        - name: WORKSPACE_DIR
+          value: "/workspace"
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+        volumeMounts:
+        - name: workspace-storage
+          mountPath: /workspace
+        - name: vscode-storage
+          mountPath: /root/.vscode-server
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          tcpSocket:
+            port: 22
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 6
+      volumes:
+      - name: workspace-storage
+        persistentVolumeClaim:
+          claimName: demo-workspace
+      - name: vscode-storage
+        persistentVolumeClaim:
+          claimName: demo-vscode
+
+---
+# Service for Demo Development Environment
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-service
+  namespace: default
+  labels:
+    app: demo
+spec:
+  type: NodePort
+  externalTrafficPolicy: Cluster
+  selector:
+    app: demo
+  ports:
+  - name: vscode-web
+    port: 8080
+    targetPort: 8080
+    nodePort: 30582
+    protocol: TCP
+  - name: ssh
+    port: 22
+    targetPort: 22
+    nodePort: 31496
+    protocol: TCP
+  - name: web-terminal
+    port: 7681
+    targetPort: 7681
+    nodePort: 32259
+    protocol: TCP
