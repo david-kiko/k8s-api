@@ -82,8 +82,53 @@ const docTemplate = `{
                 }
             }
         },
+        "/environments/list": {
+            "post": {
+                "description": "列出用户有权限访问的所有环境，支持分页和简单的命名空间过滤",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "environments"
+                ],
+                "parameters": [
+                    {
+                        "description": "列出环境请求",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.ListEnvironmentsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功，data中包含环境列表",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/environments/{name}": {
-            "get": {
+            "post": {
                 "description": "获取指定名称的环境的状态信息",
                 "consumes": [
                     "application/json"
@@ -199,7 +244,52 @@ const docTemplate = `{
                 }
             }
         },
-        "/service-accounts": {
+        "/service-accounts/list": {
+            "post": {
+                "description": "列出用户有权限查看的ServiceAccount，支持分页和命名空间过滤",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "service-accounts"
+                ],
+                "parameters": [
+                    {
+                        "description": "列出ServiceAccount请求",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.ListServiceAccountsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功，data中包含ServiceAccount列表",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/service-accounts/{name}": {
             "post": {
                 "description": "创建指定的ServiceAccount，分配权限，并返回对应的kubeconfig",
                 "consumes": [
@@ -213,6 +303,13 @@ const docTemplate = `{
                 ],
                 "summary": "创建ServiceAccount并返回kubeconfig",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "ServiceAccount名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "创建ServiceAccount请求参数",
                         "name": "request",
@@ -255,9 +352,7 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/service-accounts/{name}": {
+            },
             "delete": {
                 "description": "删除指定的ServiceAccount及其相关权限配置（Role、RoleBinding、ResourceQuota）",
                 "consumes": [
@@ -327,13 +422,21 @@ const docTemplate = `{
         "main.CreateEnvironmentRequest": {
             "type": "object",
             "required": [
+                "image",
                 "kubeconfig",
                 "name",
-                "nodeports",
                 "resources",
                 "storage"
             ],
             "properties": {
+                "image": {
+                    "type": "string",
+                    "example": "registry.km.top/kmai/ubuntu:22.04-ide"
+                },
+                "kmcode_config": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
                 "kubeconfig": {
                     "type": "string",
                     "example": "apiVersion: v1\nkind: Config\n..."
@@ -348,23 +451,18 @@ const docTemplate = `{
                 },
                 "nodeports": {
                     "type": "object",
-                    "required": [
-                        "ssh",
-                        "terminal",
-                        "vscode"
-                    ],
                     "properties": {
                         "ssh": {
                             "type": "integer",
-                            "example": 31496
+                            "example": 0
                         },
                         "terminal": {
                             "type": "integer",
-                            "example": 32259
+                            "example": 0
                         },
                         "vscode": {
                             "type": "integer",
-                            "example": 30582
+                            "example": 0
                         }
                     }
                 },
@@ -434,7 +532,6 @@ const docTemplate = `{
         "main.DeleteServiceAccountRequest": {
             "type": "object",
             "required": [
-                "kubeconfig",
                 "namespace"
             ],
             "properties": {
@@ -467,10 +564,6 @@ const docTemplate = `{
         },
         "main.KubeconfigRequest": {
             "type": "object",
-            "required": [
-                "kubeconfig",
-                "sa_name"
-            ],
             "properties": {
                 "create_if_not_exists": {
                     "type": "boolean",
@@ -505,9 +598,65 @@ const docTemplate = `{
                         }
                     }
                 },
-                "sa_name": {
+                "token_expiration_hours": {
+                    "type": "integer",
+                    "example": 1
+                }
+            }
+        },
+        "main.ListEnvironmentsRequest": {
+            "type": "object",
+            "required": [
+                "kubeconfig"
+            ],
+            "properties": {
+                "kubeconfig": {
                     "type": "string",
-                    "example": "dev-user"
+                    "example": "apiVersion: v1\nkind: Config\n..."
+                },
+                "namespace": {
+                    "description": "可选，不指定则用kubeconfig中的",
+                    "type": "string",
+                    "example": "dev-space"
+                },
+                "page": {
+                    "description": "页码，从1开始",
+                    "type": "integer",
+                    "default": 1,
+                    "example": 1
+                },
+                "page_size": {
+                    "description": "每页大小",
+                    "type": "integer",
+                    "default": 20,
+                    "example": 20
+                }
+            }
+        },
+        "main.ListServiceAccountsRequest": {
+            "type": "object",
+            "properties": {
+                "kubeconfig": {
+                    "description": "可选，不提供则用管理员kubeconfig",
+                    "type": "string",
+                    "example": "apiVersion: v1\nkind: Config\n..."
+                },
+                "namespace": {
+                    "description": "可选，不指定则列所有命名空间",
+                    "type": "string",
+                    "example": "dev-space"
+                },
+                "page": {
+                    "description": "页码，从1开始",
+                    "type": "integer",
+                    "default": 1,
+                    "example": 1
+                },
+                "page_size": {
+                    "description": "每页大小",
+                    "type": "integer",
+                    "default": 20,
+                    "example": 20
                 }
             }
         }

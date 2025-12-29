@@ -1,7 +1,7 @@
 {
     "swagger": "2.0",
     "info": {
-        "description": "Kubernetes资源管理API，支持动态创建开发环境和SA权限管理",
+        "description": "Kubernetes资源管理API，支持动态创建开发环境和SA权限管理\u003cbr\u003e\u003cbr\u003e**🚀 完整使用流程**\u003cbr\u003e\u003cbr\u003e**第一步：创建ServiceAccount**\u003cbr\u003e调用 `POST /api/v1/k8s/service-accounts/{name}` 接口创建ServiceAccount\u003cbr\u003e\u003cbr\u003e**参数说明：**\u003cbr\u003e- name: ServiceAccount名称，建议与namespace同名（如：dev-space）\u003cbr\u003e- kubeconfig: 可选字段，不传入则使用挂载的管理员kubeconfig\u003cbr\u003e- namespace: 命名空间名称，建议与name同名\u003cbr\u003e- create_if_not_exists: 设置为true自动创建namespace和ServiceAccount\u003cbr\u003e- token_expiration_hours: Token过期时间，建议设置为24小时\u003cbr\u003e\u003cbr\u003e**示例请求：**\u003cbr\u003e\u003cbr\u003e`{`\u003cbr\u003e`  \"namespace\": \"dev-space\",`\u003cbr\u003e`  \"create_if_not_exists\": true,`\u003cbr\u003e`  \"token_expiration_hours\": 24,`\u003cbr\u003e`  \"resource_limits\": {`\u003cbr\u003e`    \"cpu\": \"8\",`\u003cbr\u003e`    \"memory\": \"16Gi\",`\u003cbr\u003e`    \"storage\": \"20Gi\",`\u003cbr\u003e`    \"pod_count\": \"2\"`\u003cbr\u003e`  }`\u003cbr\u003e`}`\u003cbr\u003e\u003cbr\u003e**第二步：创建开发环境**\u003cbr\u003e使用第一步返回的kubeconfig调用 `POST /api/v1/k8s/environments` 接口\u003cbr\u003e\u003cbr\u003e**参数说明：**\u003cbr\u003e- kubeconfig: 使用第一步接口返回的完整kubeconfig内容\u003cbr\u003e- name: 环境名称，用户可自定义，但必须满足Kubernetes命名规则\u003cbr\u003e  - 只能包含小写字母、数字和连字符(-)\u003cbr\u003e  - 必须以字母开头，以字母或数字结尾\u003cbr\u003e  - 长度不超过63个字符\u003cbr\u003e  - 例如：my-web-app, dev-env-001, test-workspace-v2\u003cbr\u003e- namespace: 命名空间，必须与第一步创建的ServiceAccount的namespace一致\u003cbr\u003e- image: Docker镜像名称（必填），指定要使用的完整镜像路径\u003cbr\u003e- resources: 配置CPU和内存资源\u003cbr\u003e- storage: 配置存储空间大小\u003cbr\u003e- nodeports: 配置外部访问端口（设置为0让Kubernetes自动分配，推荐）\u003cbr\u003e\u003cbr\u003e**镜像示例：**\u003cbr\u003e- registry.km.top/kmai/ubuntu:22.04-ide - 完整的IDE开发环境（推荐）\u003cbr\u003e- ubuntu:20.04 - Ubuntu基础镜像\u003cbr\u003e- python:3.9-slim - Python开发环境\u003cbr\u003e- nginx:alpine - Web服务器\u003cbr\u003e\u003cbr\u003e**命名规则示例：**\u003cbr\u003e✅ 合法：webapp, dev-env, test-001, my-project-v2\u003cbr\u003e❌ 非法：MyApp, app_001, -invalid, invalid-\u003cbr\u003e\u003cbr\u003e**第二步示例请求：**\u003cbr\u003e\u003cbr\u003e`{`\u003cbr\u003e`  \"kubeconfig\": \"第一步返回的kubeconfig内容\",`\u003cbr\u003e`  \"name\": \"web-prod-001\",`\u003cbr\u003e`  \"namespace\": \"dev-space\",`\u003cbr\u003e`  \"image\": \"registry.km.top/kmai/ubuntu:22.04-ide\",`\u003cbr\u003e`  \"resources\": {`\u003cbr\u003e`    \"cpu\": \"1000m\",`\u003cbr\u003e`    \"cpu_limit\": \"2000m\",`\u003cbr\u003e`    \"memory\": \"2Gi\",`\u003cbr\u003e`    \"memory_limit\": \"4Gi\"`\u003cbr\u003e`  },`\u003cbr\u003e`  \"storage\": {`\u003cbr\u003e`    \"workspace\": \"10Gi\",`\u003cbr\u003e`    \"vscode\": \"5Gi\"`\u003cbr\u003e`  },`\u003cbr\u003e`  \"nodeports\": {`\u003cbr\u003e`    \"vscode\": 0,`\u003cbr\u003e`    \"ssh\": 0,`\u003cbr\u003e`    \"terminal\": 0`\u003cbr\u003e`  }`\u003cbr\u003e`}`\u003cbr\u003e\u003cbr\u003e**第三步：查看环境状态**\u003cbr\u003e调用 `POST /api/v1/k8s/environments/{name}` 接口查看环境部署状态\u003cbr\u003e\u003cbr\u003e**参数说明：**\u003cbr\u003e- name: 环境名称（与第二步一致）\u003cbr\u003e- kubeconfig: 使用第一步返回的kubeconfig\u003cbr\u003e- namespace: 命名空间（与第二步一致）\u003cbr\u003e\u003cbr\u003e**返回信息包括：**\u003cbr\u003e- Deployment状态和副本数量\u003cbr\u003e- Service状态、IP地址和NodePort端口信息\u003cbr\u003e- PVC存储状态\u003cbr\u003e- 整体环境状态（Creating/Running/Partial/Pending）\u003cbr\u003e- 外部访问服务信息（包含VSCode URL、SSH连接信息和Web Terminal URL）\u003cbr\u003e- 各服务的访问密码信息\u003cbr\u003e\u003cbr\u003e**第三步示例请求：**\u003cbr\u003e\u003cbr\u003e`{`\u003cbr\u003e`  \"kubeconfig\": \"第一步返回的kubeconfig内容\",`\u003cbr\u003e`  \"namespace\": \"dev-space\"`\u003cbr\u003e`}`\u003cbr\u003e\u003cbr\u003e**⚠️ 重要提示：**\u003cbr\u003e- 第一步创建的ServiceAccount具有完整的资源管理权限\u003cbr\u003e- 所有操作都支持幂等性，重复调用不会产生副作用\u003cbr\u003e- 确保集群中有足够的资源来创建请求的环境\u003cbr\u003e- 第二步中的image字段为必填项，请确保使用有效的Docker镜像\u003cbr\u003e- 第二步的name字段可以与SA名称不同，用于在同一namespace中创建多个环境",
         "title": "K8S Resource API",
         "termsOfService": "http://swagger.io/terms/",
         "contact": {
@@ -18,9 +18,9 @@
     "host": "localhost:8080",
     "basePath": "/api/v1/k8s",
     "paths": {
-        "/dev-env": {
+        "/environments": {
             "post": {
-                "description": "基于demo-service.yaml创建完整的K8s开发环境，包括PVC、Deployment和Service",
+                "description": "基于ServiceAccount的kubeconfig创建完整的K8s环境，包括PVC、Deployment和Service。使用传入的kubeconfig中的身份信息",
                 "consumes": [
                     "application/json"
                 ],
@@ -28,17 +28,17 @@
                     "application/json"
                 ],
                 "tags": [
-                    "dev-env"
+                    "environments"
                 ],
-                "summary": "创建开发环境",
+                "summary": "创建环境",
                 "parameters": [
                     {
-                        "description": "创建开发环境请求",
+                        "description": "创建环境请求",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/main.CreateDevEnvironmentRequest"
+                            "$ref": "#/definitions/main.CreateEnvironmentRequest"
                         }
                     }
                 ],
@@ -76,9 +76,9 @@
                 }
             }
         },
-        "/kubeconfig/{serviceAccount}": {
-            "get": {
-                "description": "返回指定SA的kubeconfig，如果SA不存在则创建SA并分配权限",
+        "/environments/{name}": {
+            "post": {
+                "description": "获取指定名称的环境的状态信息",
                 "consumes": [
                     "application/json"
                 ],
@@ -86,43 +86,142 @@
                     "application/json"
                 ],
                 "tags": [
-                    "kubeconfig"
+                    "environments"
                 ],
-                "summary": "获取ServiceAccount的kubeconfig",
+                "summary": "获取环境信息",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "ServiceAccount名称",
-                        "name": "serviceAccount",
+                        "description": "环境名称",
+                        "name": "name",
                         "in": "path",
                         "required": true
                     },
                     {
+                        "description": "获取环境信息请求参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.GetEnvironmentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/main.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object",
+                                            "additionalProperties": true
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "删除指定名称的环境，包括PVC、Deployment和Service",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "environments"
+                ],
+                "summary": "删除环境",
+                "parameters": [
+                    {
                         "type": "string",
-                        "description": "用于操作的kubeconfig内容",
-                        "name": "kubeconfig",
-                        "in": "query",
+                        "description": "环境名称",
+                        "name": "name",
+                        "in": "path",
                         "required": true
                     },
                     {
+                        "description": "删除环境请求参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.DeleteEnvironmentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/service-accounts/{name}": {
+            "post": {
+                "description": "创建指定的ServiceAccount，分配权限，并返回对应的kubeconfig",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "service-accounts"
+                ],
+                "summary": "创建ServiceAccount并返回kubeconfig",
+                "parameters": [
+                    {
                         "type": "string",
-                        "default": "default",
-                        "description": "SA所在的namespace",
-                        "name": "namespace",
-                        "in": "query"
+                        "description": "ServiceAccount名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
                     },
                     {
-                        "type": "boolean",
-                        "default": true,
-                        "description": "如果SA不存在是否创建",
-                        "name": "create_if_not_exists",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "默认资源配额",
-                        "name": "resource_quota",
-                        "in": "query"
+                        "description": "创建ServiceAccount请求参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.KubeconfigRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -142,6 +241,57 @@
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "删除指定的ServiceAccount及其相关权限配置（Role、RoleBinding、ResourceQuota）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "service-accounts"
+                ],
+                "summary": "删除ServiceAccount",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "ServiceAccount名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "删除ServiceAccount请求参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.DeleteServiceAccountRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
                         }
                     },
                     "400": {
@@ -164,62 +314,73 @@
         "main.APIResponse": {
             "type": "object",
             "properties": {
-                "data": {},
+                "data": {
+                    "description": "@Description API响应的业务数据，仅在成功时返回，失败时此字段可能为空\n@Optional 可选字段，仅在成功且有数据返回时包含\n@Example {\"namespace\": \"dev-space\", \"service_name\": \"demo-service\"}, {\"service_account\": \"user-a\"}"
+                },
                 "message": {
+                    "description": "@Description API处理结果的消息说明，包含成功信息或错误详情\n@Example \"开发环境部署成功\", \"请求参数错误: kubeconfig格式无效\"",
                     "type": "string"
                 },
                 "success": {
+                    "description": "@Description API请求是否成功处理\n@Example true(成功), false(失败)",
                     "type": "boolean"
                 }
             }
         },
-        "main.CreateDevEnvironmentRequest": {
+        "main.CreateEnvironmentRequest": {
             "type": "object",
             "required": [
+                "image",
                 "kubeconfig",
                 "name",
-                "namespace",
-                "nodeports",
                 "resources",
-                "sa_name",
                 "storage"
             ],
             "properties": {
-                "kubeconfig": {
+                "image": {
+                    "description": "@Description Docker镜像名称，用于创建开发环境的容器镜像\n@Required 必填字段，指定要使用的完整Docker镜像路径\n@Example \"registry.km.top/kmai/ubuntu:22.04-ide\", \"ubuntu:20.04\", \"nginx:alpine\", \"python:3.9-slim\"",
                     "type": "string",
-                    "example": "apiVersion: v1\nkind: Config\n..."
+                    "example": "registry.km.top/kmai/ubuntu:22.04-ide"
+                },
+                "kubeconfig": {
+                    "description": "@Description Kubeconfig配置文件内容，必须是有效的YAML格式。包含用于连接Kubernetes集群的完整配置信息。\n@Required 必填字段，用于验证用户权限和创建Kubernetes资源\n@Example 请提供ServiceAccount的kubeconfig内容，包含clusters、contexts、users等完整配置",
+                    "type": "string",
+                    "format": "yaml",
+                    "example": "apiVersion: v1\nkind: Config\nclusters:\n- cluster:\n    server: https://your-k8s-api-server:6443\n  name: cluster\ncurrent-context: context\n..."
                 },
                 "name": {
+                    "description": "@Description 环境名称，用于标识创建的开发环境。将作为Kubernetes资源的名称前缀。\n@Required 必填字段，只能包含小写字母、数字和连字符，且必须以字母开头\n@Example \"demo\", \"dev-env-001\", \"test-workspace\"",
                     "type": "string",
                     "example": "demo"
                 },
                 "namespace": {
+                    "description": "@Description Kubernetes命名空间，用于资源隔离。如果不提供，将使用kubeconfig中的默认命名空间。\n@Optional 可选字段，如果为空则使用kubeconfig配置中的namespace\n@Example \"dev-space\", \"team-a\", \"user-workspace\"",
                     "type": "string",
                     "example": "dev-space"
                 },
                 "nodeports": {
+                    "description": "@Description NodePort端口配置，用于外部访问服务\n@Optional 可选字段，如果不设置将使用随机端口",
                     "type": "object",
-                    "required": [
-                        "ssh",
-                        "terminal",
-                        "vscode"
-                    ],
                     "properties": {
                         "ssh": {
+                            "description": "@Description SSH服务的NodePort端口，用于外部SSH连接\n@Optional 可选字段，0表示使用随机端口，30000-32767表示指定端口\n@Example 0(随机端口), 30022, 31022",
                             "type": "integer",
-                            "example": 31496
+                            "example": 0
                         },
                         "terminal": {
+                            "description": "@Description Web Terminal服务的NodePort端口，用于外部访问Web终端\n@Optional 可选字段，0表示使用随机端口，30000-32767表示指定端口\n@Example 0(随机端口), 30030, 31030",
                             "type": "integer",
-                            "example": 32259
+                            "example": 0
                         },
                         "vscode": {
+                            "description": "@Description VSCode服务的NodePort端口，用于外部访问VSCode界面\n@Optional 可选字段，0表示使用随机端口，30000-32767表示指定端口\n@Example 0(随机端口), 30080, 31080",
                             "type": "integer",
-                            "example": 30582
+                            "example": 0
                         }
                     }
                 },
                 "resources": {
+                    "description": "@Description 计算资源配置，定义容器的CPU和内存限制\n@Required 必填字段，所有子字段都必须提供",
                     "type": "object",
                     "required": [
                         "cpu",
@@ -229,28 +390,29 @@
                     ],
                     "properties": {
                         "cpu": {
+                            "description": "@Description CPU请求值，保证容器可用的最小CPU资源\n@Required 必填字段，支持m(毫核)或整数格式\n@Example \"1000m\"(1核), \"500m\"(0.5核), \"2\"(2核)",
                             "type": "string",
                             "example": "1000m"
                         },
                         "cpu_limit": {
+                            "description": "@Description CPU限制值，容器可使用的最大CPU资源\n@Required 必填字段，必须大于等于请求值，支持m(毫核)或整数格式\n@Example \"2000m\"(2核), \"1000m\"(1核), \"4\"(4核)",
                             "type": "string",
                             "example": "2000m"
                         },
                         "memory": {
+                            "description": "@Description 内存请求值，保证容器可用的最小内存资源\n@Required 必填字段，支持Gi、Mi、GB、MB等格式\n@Example \"2Gi\"(2GB), \"512Mi\"(512MB), \"1Gi\"(1GB)",
                             "type": "string",
                             "example": "2Gi"
                         },
                         "memory_limit": {
+                            "description": "@Description 内存限制值，容器可使用的最大内存资源\n@Required 必填字段，必须大于等于请求值，支持Gi、Mi、GB、MB等格式\n@Example \"4Gi\"(4GB), \"1Gi\"(1GB), \"8Gi\"(8GB)",
                             "type": "string",
                             "example": "4Gi"
                         }
                     }
                 },
-                "sa_name": {
-                    "type": "string",
-                    "example": "dev-user"
-                },
                 "storage": {
+                    "description": "@Description 存储资源配置，定义PVC的存储大小\n@Required 必填字段，所有子字段都必须提供",
                     "type": "object",
                     "required": [
                         "vscode",
@@ -258,14 +420,125 @@
                     ],
                     "properties": {
                         "vscode": {
+                            "description": "@Description VSCode扩展存储大小，用于VSCode服务器和相关扩展\n@Required 必填字段，支持Gi、Mi、GB、MB等格式\n@Example \"5Gi\"(5GB), \"10Gi\"(10GB), \"2Gi\"(2GB)",
                             "type": "string",
                             "example": "5Gi"
                         },
                         "workspace": {
+                            "description": "@Description 工作区存储大小，用于代码开发环境的主目录\n@Required 必填字段，支持Gi、Mi、GB、MB等格式\n@Example \"10Gi\"(10GB), \"20Gi\"(20GB), \"5Gi\"(5GB)",
                             "type": "string",
                             "example": "10Gi"
                         }
                     }
+                }
+            }
+        },
+        "main.DeleteEnvironmentRequest": {
+            "type": "object",
+            "required": [
+                "kubeconfig",
+                "namespace"
+            ],
+            "properties": {
+                "kubeconfig": {
+                    "description": "@Description ServiceAccount的kubeconfig配置文件内容，用于验证权限和删除Kubernetes资源\n@Required 必填字段，必须具有删除相关资源的权限\n@Example 请提供用于创建环境的ServiceAccount的kubeconfig内容",
+                    "type": "string",
+                    "format": "yaml",
+                    "example": "apiVersion: v1\nkind: Config\nclusters:\n- cluster:\n    server: https://your-k8s-api-server:6443\n..."
+                },
+                "namespace": {
+                    "description": "@Description 要删除环境所在的Kubernetes命名空间\n@Required 必填字段，必须与创建环境时使用的命名空间一致\n@Example \"dev-space\", \"team-a\", \"user-workspace\"",
+                    "type": "string",
+                    "example": "dev-space"
+                }
+            }
+        },
+        "main.DeleteServiceAccountRequest": {
+            "type": "object",
+            "required": [
+                "namespace"
+            ],
+            "properties": {
+                "kubeconfig": {
+                    "description": "@Description 管理员kubeconfig配置文件内容，用于删除ServiceAccount及相关权限配置\n@Optional 可选字段，如果不传入则使用容器内挂载的管理员kubeconfig文件\n@Example 请提供具有删除ServiceAccount权限的kubeconfig内容",
+                    "type": "string",
+                    "example": "apiVersion: v1\nkind: Config\nclusters:\n- cluster:\n    server: https://your-k8s-api-server:6443\n..."
+                },
+                "namespace": {
+                    "description": "@Description ServiceAccount所在的Kubernetes命名空间\n@Required 必填字段，必须与创建ServiceAccount时使用的命名空间一致\n@Example \"dev-team\", \"user-a\", \"production\"",
+                    "type": "string",
+                    "example": "dev-space"
+                }
+            }
+        },
+        "main.GetEnvironmentRequest": {
+            "type": "object",
+            "required": [
+                "kubeconfig",
+                "namespace"
+            ],
+            "properties": {
+                "kubeconfig": {
+                    "description": "@Description ServiceAccount的kubeconfig配置文件内容，用于验证权限和查询Kubernetes资源状态\n@Required 必填字段，必须具有查看相关资源的权限\n@Example 请提供用于创建环境的ServiceAccount的kubeconfig内容",
+                    "type": "string",
+                    "format": "yaml",
+                    "example": "apiVersion: v1\nkind: Config\nclusters:\n- cluster:\n    server: https://your-k8s-api-server:6443\n..."
+                },
+                "namespace": {
+                    "description": "@Description 要查询环境所在的Kubernetes命名空间\n@Required 必填字段，必须与创建环境时使用的命名空间一致\n@Example \"dev-space\", \"team-a\", \"user-workspace\"",
+                    "type": "string",
+                    "example": "dev-space"
+                }
+            }
+        },
+        "main.KubeconfigRequest": {
+            "type": "object",
+            "properties": {
+                "create_if_not_exists": {
+                    "description": "@Description 是否在ServiceAccount或Namespace不存在时自动创建\n@Optional 可选字段，默认为false\n@Example true(自动创建), false(不自动创建)",
+                    "type": "boolean",
+                    "example": true
+                },
+                "kubeconfig": {
+                    "description": "@Description 管理员kubeconfig配置文件内容，用于创建ServiceAccount和分配权限\n@Optional 可选字段，如果不传入则使用容器内挂载的管理员kubeconfig文件\n@Example 请提供具有集群管理权限的kubeconfig内容",
+                    "type": "string",
+                    "example": "apiVersion: v1\nkind: Config\nclusters:\n- cluster:\n    server: https://your-k8s-api-server:6443\n..."
+                },
+                "namespace": {
+                    "description": "@Description Kubernetes命名空间，ServiceAccount将在该命名空间中创建\n@Optional 可选字段，如果为空则使用\"default\"命名空间\n@Example \"dev-team\", \"user-a\", \"production\"",
+                    "type": "string",
+                    "example": "default"
+                },
+                "resource_limits": {
+                    "description": "@Description ServiceAccount资源限制配置，用于控制资源使用量\n@Optional 可选字段，如果不设置则使用默认值",
+                    "type": "object",
+                    "properties": {
+                        "cpu": {
+                            "description": "@Description CPU限制，控制ServiceAccount可使用的最大CPU资源\n@Optional 可选字段，默认为8核，支持整数或毫核格式\n@Example \"8\"(8核), \"4000m\"(4核), \"16000m\"(16核)",
+                            "type": "string",
+                            "example": "8"
+                        },
+                        "memory": {
+                            "description": "@Description 内存限制，控制ServiceAccount可使用的最大内存资源\n@Optional 可选字段，默认为16Gi，支持Gi、Mi等格式\n@Example \"16Gi\"(16GB), \"32Gi\"(32GB), \"8Gi\"(8GB)",
+                            "type": "string",
+                            "example": "16Gi"
+                        },
+                        "pod_count": {
+                            "description": "@Description Pod数量限制，控制ServiceAccount可创建的Pod数量上限\n@Optional 可选字段，默认为2个Pod\n@Example \"2\"(2个Pod), \"5\"(5个Pod), \"10\"(10个Pod)",
+                            "type": "string",
+                            "example": "2"
+                        },
+                        "storage": {
+                            "description": "@Description 存储限制，控制ServiceAccount可创建的PVC总存储容量\n@Optional 可选字段，默认为20Gi，支持Gi、Mi等格式\n@Example \"20Gi\"(20GB), \"50Gi\"(50GB), \"100Gi\"(100GB)",
+                            "type": "string",
+                            "example": "20Gi"
+                        }
+                    }
+                },
+                "token_expiration_hours": {
+                    "description": "@Description 生成的Token过期时间，以小时为单位\n@Optional 可选字段，默认为1小时\n@Example 1(1小时), 24(24小时), 168(7天)",
+                    "type": "integer",
+                    "example": 1
                 }
             }
         }

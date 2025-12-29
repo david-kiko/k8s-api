@@ -41,8 +41,9 @@ RUN addgroup -g 1001 -S appgroup && \
 # 设置工作目录
 WORKDIR /app
 
-# 从构建阶段复制可执行文件
+# 从构建阶段复制可执行文件和swagger文档
 COPY --from=builder /app/k8s-api .
+COPY --from=builder /app/docs/swagger ./docs/swagger
 
 # 创建必要的目录
 RUN mkdir -p logs config && \

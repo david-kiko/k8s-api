@@ -10,6 +10,12 @@ definitions:
     type: object
   main.CreateEnvironmentRequest:
     properties:
+      image:
+        example: registry.km.top/kmai/ubuntu:22.04-ide
+        type: string
+      kmcode_config:
+        additionalProperties: true
+        type: object
       kubeconfig:
         example: |-
           apiVersion: v1
@@ -25,18 +31,14 @@ definitions:
       nodeports:
         properties:
           ssh:
-            example: 31496
+            example: 0
             type: integer
           terminal:
-            example: 32259
+            example: 0
             type: integer
           vscode:
-            example: 30582
+            example: 0
             type: integer
-        required:
-        - ssh
-        - terminal
-        - vscode
         type: object
       resources:
         properties:
@@ -71,9 +73,9 @@ definitions:
         - workspace
         type: object
     required:
+    - image
     - kubeconfig
     - name
-    - nodeports
     - resources
     - storage
     type: object
@@ -104,7 +106,6 @@ definitions:
         example: dev-space
         type: string
     required:
-    - kubeconfig
     - namespace
     type: object
   main.GetEnvironmentRequest:
@@ -151,12 +152,58 @@ definitions:
             example: 20Gi
             type: string
         type: object
-      sa_name:
-        example: dev-user
+      token_expiration_hours:
+        example: 1
+        type: integer
+    type: object
+  main.ListEnvironmentsRequest:
+    properties:
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
         type: string
+      namespace:
+        description: 可选，不指定则用kubeconfig中的
+        example: dev-space
+        type: string
+      page:
+        default: 1
+        description: 页码，从1开始
+        example: 1
+        type: integer
+      page_size:
+        default: 20
+        description: 每页大小
+        example: 20
+        type: integer
     required:
     - kubeconfig
-    - sa_name
+    type: object
+  main.ListServiceAccountsRequest:
+    properties:
+      kubeconfig:
+        description: 可选，不提供则用管理员kubeconfig
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      namespace:
+        description: 可选，不指定则列所有命名空间
+        example: dev-space
+        type: string
+      page:
+        default: 1
+        description: 页码，从1开始
+        example: 1
+        type: integer
+      page_size:
+        default: 20
+        description: 每页大小
+        example: 20
+        type: integer
     type: object
 host: localhost:8080
 info:
@@ -242,7 +289,7 @@ paths:
       summary: 删除环境
       tags:
       - environments
-    get:
+    post:
       consumes:
       - application/json
       description: 获取指定名称的环境的状态信息
@@ -282,30 +329,25 @@ paths:
       summary: 获取环境信息
       tags:
       - environments
-  /service-accounts:
+  /environments/list:
     post:
       consumes:
       - application/json
-      description: 创建指定的ServiceAccount，分配权限，并返回对应的kubeconfig
+      description: 列出用户有权限访问的所有环境，支持分页和简单的命名空间过滤
       parameters:
-      - description: 创建ServiceAccount请求参数
+      - description: 列出环境请求
         in: body
         name: request
         required: true
         schema:
-          $ref: '#/definitions/main.KubeconfigRequest'
+          $ref: '#/definitions/main.ListEnvironmentsRequest'
       produces:
       - application/json
       responses:
         "200":
-          description: 成功
+          description: 成功，data中包含环境列表
           schema:
-            allOf:
-            - $ref: '#/definitions/main.APIResponse'
-            - properties:
-                data:
-                  type: string
-              type: object
+            $ref: '#/definitions/main.APIResponse'
         "400":
           description: 请求参数错误
           schema:
@@ -314,9 +356,8 @@ paths:
           description: 服务器内部错误
           schema:
             $ref: '#/definitions/main.APIResponse'
-      summary: 创建ServiceAccount并返回kubeconfig
       tags:
-      - service-accounts
+      - environments
   /service-accounts/{name}:
     delete:
       consumes:
@@ -350,6 +391,74 @@ paths:
           schema:
             $ref: '#/definitions/main.APIResponse'
       summary: 删除ServiceAccount
+      tags:
+      - service-accounts
+    post:
+      consumes:
+      - application/json
+      description: 创建指定的ServiceAccount，分配权限，并返回对应的kubeconfig
+      parameters:
+      - description: ServiceAccount名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 创建ServiceAccount请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.KubeconfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/main.APIResponse'
+            - properties:
+                data:
+                  type: string
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 创建ServiceAccount并返回kubeconfig
+      tags:
+      - service-accounts
+  /service-accounts/list:
+    post:
+      consumes:
+      - application/json
+      description: 列出用户有权限查看的ServiceAccount，支持分页和命名空间过滤
+      parameters:
+      - description: 列出ServiceAccount请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.ListServiceAccountsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功，data中包含ServiceAccount列表
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
       tags:
       - service-accounts
 securityDefinitions:

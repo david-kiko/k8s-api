@@ -2,54 +2,119 @@ basePath: /api/v1/k8s
 definitions:
   main.APIResponse:
     properties:
-      data: {}
+      data:
+        description: |-
+          @Description API响应的业务数据，仅在成功时返回，失败时此字段可能为空
+          @Optional 可选字段，仅在成功且有数据返回时包含
+          @Example {"namespace": "dev-space", "service_name": "demo-service"}, {"service_account": "user-a"}
       message:
+        description: |-
+          @Description API处理结果的消息说明，包含成功信息或错误详情
+          @Example "开发环境部署成功", "请求参数错误: kubeconfig格式无效"
         type: string
       success:
+        description: |-
+          @Description API请求是否成功处理
+          @Example true(成功), false(失败)
         type: boolean
     type: object
-  main.CreateDevEnvironmentRequest:
+  main.CreateEnvironmentRequest:
     properties:
+      image:
+        description: |-
+          @Description Docker镜像名称，用于创建开发环境的容器镜像
+          @Required 必填字段，指定要使用的完整Docker镜像路径
+          @Example "registry.km.top/kmai/ubuntu:22.04-ide", "ubuntu:20.04", "nginx:alpine", "python:3.9-slim"
+        example: registry.km.top/kmai/ubuntu:22.04-ide
+        type: string
       kubeconfig:
+        description: |-
+          @Description Kubeconfig配置文件内容，必须是有效的YAML格式。包含用于连接Kubernetes集群的完整配置信息。
+          @Required 必填字段，用于验证用户权限和创建Kubernetes资源
+          @Example 请提供ServiceAccount的kubeconfig内容，包含clusters、contexts、users等完整配置
         example: |-
           apiVersion: v1
           kind: Config
+          clusters:
+          - cluster:
+              server: https://your-k8s-api-server:6443
+            name: cluster
+          current-context: context
           ...
+        format: yaml
         type: string
       name:
+        description: |-
+          @Description 环境名称，用于标识创建的开发环境。将作为Kubernetes资源的名称前缀。
+          @Required 必填字段，只能包含小写字母、数字和连字符，且必须以字母开头
+          @Example "demo", "dev-env-001", "test-workspace"
         example: demo
         type: string
       namespace:
+        description: |-
+          @Description Kubernetes命名空间，用于资源隔离。如果不提供，将使用kubeconfig中的默认命名空间。
+          @Optional 可选字段，如果为空则使用kubeconfig配置中的namespace
+          @Example "dev-space", "team-a", "user-workspace"
         example: dev-space
         type: string
       nodeports:
+        description: |-
+          @Description NodePort端口配置，用于外部访问服务
+          @Optional 可选字段，如果不设置将使用随机端口
         properties:
           ssh:
-            example: 31496
+            description: |-
+              @Description SSH服务的NodePort端口，用于外部SSH连接
+              @Optional 可选字段，0表示使用随机端口，30000-32767表示指定端口
+              @Example 0(随机端口), 30022, 31022
+            example: 0
             type: integer
           terminal:
-            example: 32259
+            description: |-
+              @Description Web Terminal服务的NodePort端口，用于外部访问Web终端
+              @Optional 可选字段，0表示使用随机端口，30000-32767表示指定端口
+              @Example 0(随机端口), 30030, 31030
+            example: 0
             type: integer
           vscode:
-            example: 30582
+            description: |-
+              @Description VSCode服务的NodePort端口，用于外部访问VSCode界面
+              @Optional 可选字段，0表示使用随机端口，30000-32767表示指定端口
+              @Example 0(随机端口), 30080, 31080
+            example: 0
             type: integer
-        required:
-        - ssh
-        - terminal
-        - vscode
         type: object
       resources:
+        description: |-
+          @Description 计算资源配置，定义容器的CPU和内存限制
+          @Required 必填字段，所有子字段都必须提供
         properties:
           cpu:
+            description: |-
+              @Description CPU请求值，保证容器可用的最小CPU资源
+              @Required 必填字段，支持m(毫核)或整数格式
+              @Example "1000m"(1核), "500m"(0.5核), "2"(2核)
             example: 1000m
             type: string
           cpu_limit:
+            description: |-
+              @Description CPU限制值，容器可使用的最大CPU资源
+              @Required 必填字段，必须大于等于请求值，支持m(毫核)或整数格式
+              @Example "2000m"(2核), "1000m"(1核), "4"(4核)
             example: 2000m
             type: string
           memory:
+            description: |-
+              @Description 内存请求值，保证容器可用的最小内存资源
+              @Required 必填字段，支持Gi、Mi、GB、MB等格式
+              @Example "2Gi"(2GB), "512Mi"(512MB), "1Gi"(1GB)
             example: 2Gi
             type: string
           memory_limit:
+            description: |-
+              @Description 内存限制值，容器可使用的最大内存资源
+              @Required 必填字段，必须大于等于请求值，支持Gi、Mi、GB、MB等格式
+              @Example "4Gi"(4GB), "1Gi"(1GB), "8Gi"(8GB)
             example: 4Gi
             type: string
         required:
@@ -58,15 +123,23 @@ definitions:
         - memory
         - memory_limit
         type: object
-      sa_name:
-        example: dev-user
-        type: string
       storage:
+        description: |-
+          @Description 存储资源配置，定义PVC的存储大小
+          @Required 必填字段，所有子字段都必须提供
         properties:
           vscode:
+            description: |-
+              @Description VSCode扩展存储大小，用于VSCode服务器和相关扩展
+              @Required 必填字段，支持Gi、Mi、GB、MB等格式
+              @Example "5Gi"(5GB), "10Gi"(10GB), "2Gi"(2GB)
             example: 5Gi
             type: string
           workspace:
+            description: |-
+              @Description 工作区存储大小，用于代码开发环境的主目录
+              @Required 必填字段，支持Gi、Mi、GB、MB等格式
+              @Example "10Gi"(10GB), "20Gi"(20GB), "5Gi"(5GB)
             example: 10Gi
             type: string
         required:
@@ -74,13 +147,161 @@ definitions:
         - workspace
         type: object
     required:
+    - image
     - kubeconfig
     - name
-    - namespace
-    - nodeports
     - resources
-    - sa_name
     - storage
+    type: object
+  main.DeleteEnvironmentRequest:
+    properties:
+      kubeconfig:
+        description: |-
+          @Description ServiceAccount的kubeconfig配置文件内容，用于验证权限和删除Kubernetes资源
+          @Required 必填字段，必须具有删除相关资源的权限
+          @Example 请提供用于创建环境的ServiceAccount的kubeconfig内容
+        example: |-
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: https://your-k8s-api-server:6443
+          ...
+        format: yaml
+        type: string
+      namespace:
+        description: |-
+          @Description 要删除环境所在的Kubernetes命名空间
+          @Required 必填字段，必须与创建环境时使用的命名空间一致
+          @Example "dev-space", "team-a", "user-workspace"
+        example: dev-space
+        type: string
+    required:
+    - kubeconfig
+    - namespace
+    type: object
+  main.DeleteServiceAccountRequest:
+    properties:
+      kubeconfig:
+        description: |-
+          @Description 管理员kubeconfig配置文件内容，用于删除ServiceAccount及相关权限配置
+          @Optional 可选字段，如果不传入则使用容器内挂载的管理员kubeconfig文件
+          @Example 请提供具有删除ServiceAccount权限的kubeconfig内容
+        example: |-
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: https://your-k8s-api-server:6443
+          ...
+        type: string
+      namespace:
+        description: |-
+          @Description ServiceAccount所在的Kubernetes命名空间
+          @Required 必填字段，必须与创建ServiceAccount时使用的命名空间一致
+          @Example "dev-team", "user-a", "production"
+        example: dev-space
+        type: string
+    required:
+    - namespace
+    type: object
+  main.GetEnvironmentRequest:
+    properties:
+      kubeconfig:
+        description: |-
+          @Description ServiceAccount的kubeconfig配置文件内容，用于验证权限和查询Kubernetes资源状态
+          @Required 必填字段，必须具有查看相关资源的权限
+          @Example 请提供用于创建环境的ServiceAccount的kubeconfig内容
+        example: |-
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: https://your-k8s-api-server:6443
+          ...
+        format: yaml
+        type: string
+      namespace:
+        description: |-
+          @Description 要查询环境所在的Kubernetes命名空间
+          @Required 必填字段，必须与创建环境时使用的命名空间一致
+          @Example "dev-space", "team-a", "user-workspace"
+        example: dev-space
+        type: string
+    required:
+    - kubeconfig
+    - namespace
+    type: object
+  main.KubeconfigRequest:
+    properties:
+      create_if_not_exists:
+        description: |-
+          @Description 是否在ServiceAccount或Namespace不存在时自动创建
+          @Optional 可选字段，默认为false
+          @Example true(自动创建), false(不自动创建)
+        example: true
+        type: boolean
+      kubeconfig:
+        description: |-
+          @Description 管理员kubeconfig配置文件内容，用于创建ServiceAccount和分配权限
+          @Optional 可选字段，如果不传入则使用容器内挂载的管理员kubeconfig文件
+          @Example 请提供具有集群管理权限的kubeconfig内容
+        example: |-
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - cluster:
+              server: https://your-k8s-api-server:6443
+          ...
+        type: string
+      namespace:
+        description: |-
+          @Description Kubernetes命名空间，ServiceAccount将在该命名空间中创建
+          @Optional 可选字段，如果为空则使用"default"命名空间
+          @Example "dev-team", "user-a", "production"
+        example: default
+        type: string
+      resource_limits:
+        description: |-
+          @Description ServiceAccount资源限制配置，用于控制资源使用量
+          @Optional 可选字段，如果不设置则使用默认值
+        properties:
+          cpu:
+            description: |-
+              @Description CPU限制，控制ServiceAccount可使用的最大CPU资源
+              @Optional 可选字段，默认为8核，支持整数或毫核格式
+              @Example "8"(8核), "4000m"(4核), "16000m"(16核)
+            example: "8"
+            type: string
+          memory:
+            description: |-
+              @Description 内存限制，控制ServiceAccount可使用的最大内存资源
+              @Optional 可选字段，默认为16Gi，支持Gi、Mi等格式
+              @Example "16Gi"(16GB), "32Gi"(32GB), "8Gi"(8GB)
+            example: 16Gi
+            type: string
+          pod_count:
+            description: |-
+              @Description Pod数量限制，控制ServiceAccount可创建的Pod数量上限
+              @Optional 可选字段，默认为2个Pod
+              @Example "2"(2个Pod), "5"(5个Pod), "10"(10个Pod)
+            example: "2"
+            type: string
+          storage:
+            description: |-
+              @Description 存储限制，控制ServiceAccount可创建的PVC总存储容量
+              @Optional 可选字段，默认为20Gi，支持Gi、Mi等格式
+              @Example "20Gi"(20GB), "50Gi"(50GB), "100Gi"(100GB)
+            example: 20Gi
+            type: string
+        type: object
+      token_expiration_hours:
+        description: |-
+          @Description 生成的Token过期时间，以小时为单位
+          @Optional 可选字段，默认为1小时
+          @Example 1(1小时), 24(24小时), 168(7天)
+        example: 1
+        type: integer
     type: object
 host: localhost:8080
 info:
@@ -88,7 +309,37 @@ info:
     email: support@swagger.io
     name: API Support
     url: http://www.swagger.io/support
-  description: Kubernetes资源管理API，支持动态创建开发环境和SA权限管理
+  description: "Kubernetes资源管理API，支持动态创建开发环境和SA权限管理<br><br>**\U0001F680 完整使用流程**<br><br>**第一步：创建ServiceAccount**<br>调用
+    `POST /api/v1/k8s/service-accounts/{name}` 接口创建ServiceAccount<br><br>**参数说明：**<br>-
+    name: ServiceAccount名称，建议与namespace同名（如：dev-space）<br>- kubeconfig: 可选字段，不传入则使用挂载的管理员kubeconfig<br>-
+    namespace: 命名空间名称，建议与name同名<br>- create_if_not_exists: 设置为true自动创建namespace和ServiceAccount<br>-
+    token_expiration_hours: Token过期时间，建议设置为24小时<br><br>**示例请求：**<br><br>`{`<br>`  \"namespace\":
+    \"dev-space\",`<br>`  \"create_if_not_exists\": true,`<br>`  \"token_expiration_hours\":
+    24,`<br>`  \"resource_limits\": {`<br>`    \"cpu\": \"8\",`<br>`    \"memory\":
+    \"16Gi\",`<br>`    \"storage\": \"20Gi\",`<br>`    \"pod_count\": \"2\"`<br>`
+    \ }`<br>`}`<br><br>**第二步：创建开发环境**<br>使用第一步返回的kubeconfig调用 `POST /api/v1/k8s/environments`
+    接口<br><br>**参数说明：**<br>- kubeconfig: 使用第一步接口返回的完整kubeconfig内容<br>- name: 环境名称，用户可自定义，但必须满足Kubernetes命名规则<br>
+    \ - 只能包含小写字母、数字和连字符(-)<br>  - 必须以字母开头，以字母或数字结尾<br>  - 长度不超过63个字符<br>  - 例如：my-web-app,
+    dev-env-001, test-workspace-v2<br>- namespace: 命名空间，必须与第一步创建的ServiceAccount的namespace一致<br>-
+    image: Docker镜像名称（必填），指定要使用的完整镜像路径<br>- resources: 配置CPU和内存资源<br>- storage: 配置存储空间大小<br>-
+    nodeports: 配置外部访问端口（设置为0让Kubernetes自动分配，推荐）<br><br>**镜像示例：**<br>- registry.km.top/kmai/ubuntu:22.04-ide
+    - 完整的IDE开发环境（推荐）<br>- ubuntu:20.04 - Ubuntu基础镜像<br>- python:3.9-slim - Python开发环境<br>-
+    nginx:alpine - Web服务器<br><br>**命名规则示例：**<br>✅ 合法：webapp, dev-env, test-001, my-project-v2<br>❌
+    非法：MyApp, app_001, -invalid, invalid-<br><br>**第二步示例请求：**<br><br>`{`<br>`  \"kubeconfig\":
+    \"第一步返回的kubeconfig内容\",`<br>`  \"name\": \"web-prod-001\",`<br>`  \"namespace\":
+    \"dev-space\",`<br>`  \"image\": \"registry.km.top/kmai/ubuntu:22.04-ide\",`<br>`
+    \ \"resources\": {`<br>`    \"cpu\": \"1000m\",`<br>`    \"cpu_limit\": \"2000m\",`<br>`
+    \   \"memory\": \"2Gi\",`<br>`    \"memory_limit\": \"4Gi\"`<br>`  },`<br>`  \"storage\":
+    {`<br>`    \"workspace\": \"10Gi\",`<br>`    \"vscode\": \"5Gi\"`<br>`  },`<br>`
+    \ \"nodeports\": {`<br>`    \"vscode\": 0,`<br>`    \"ssh\": 0,`<br>`    \"terminal\":
+    0`<br>`  }`<br>`}`<br><br>**第三步：查看环境状态**<br>调用 `POST /api/v1/k8s/environments/{name}`
+    接口查看环境部署状态<br><br>**参数说明：**<br>- name: 环境名称（与第二步一致）<br>- kubeconfig: 使用第一步返回的kubeconfig<br>-
+    namespace: 命名空间（与第二步一致）<br><br>**返回信息包括：**<br>- Deployment状态和副本数量<br>- Service状态、IP地址和NodePort端口信息<br>-
+    PVC存储状态<br>- 整体环境状态（Creating/Running/Partial/Pending）<br>- 外部访问服务信息（包含VSCode URL、SSH连接信息和Web
+    Terminal URL）<br>- 各服务的访问密码信息<br><br>**第三步示例请求：**<br><br>`{`<br>`  \"kubeconfig\":
+    \"第一步返回的kubeconfig内容\",`<br>`  \"namespace\": \"dev-space\"`<br>`}`<br><br>**⚠️
+    重要提示：**<br>- 第一步创建的ServiceAccount具有完整的资源管理权限<br>- 所有操作都支持幂等性，重复调用不会产生副作用<br>-
+    确保集群中有足够的资源来创建请求的环境<br>- 第二步中的image字段为必填项，请确保使用有效的Docker镜像<br>- 第二步的name字段可以与SA名称不同，用于在同一namespace中创建多个环境"
   license:
     name: Apache 2.0
     url: http://www.apache.org/licenses/LICENSE-2.0.html
@@ -96,18 +347,18 @@ info:
   title: K8S Resource API
   version: "1.0"
 paths:
-  /dev-env:
+  /environments:
     post:
       consumes:
       - application/json
-      description: 基于demo-service.yaml创建完整的K8s开发环境，包括PVC、Deployment和Service
+      description: 基于ServiceAccount的kubeconfig创建完整的K8s环境，包括PVC、Deployment和Service。使用传入的kubeconfig中的身份信息
       parameters:
-      - description: 创建开发环境请求
+      - description: 创建环境请求
         in: body
         name: request
         required: true
         schema:
-          $ref: '#/definitions/main.CreateDevEnvironmentRequest'
+          $ref: '#/definitions/main.CreateEnvironmentRequest'
       produces:
       - application/json
       responses:
@@ -128,39 +379,135 @@ paths:
           description: 服务器内部错误
           schema:
             $ref: '#/definitions/main.APIResponse'
-      summary: 创建开发环境
+      summary: 创建环境
       tags:
-      - dev-env
-  /kubeconfig/{serviceAccount}:
-    get:
+      - environments
+  /environments/{name}:
+    delete:
       consumes:
       - application/json
-      description: 返回指定SA的kubeconfig，如果SA不存在则创建SA并分配权限
+      description: 删除指定名称的环境，包括PVC、Deployment和Service
+      parameters:
+      - description: 环境名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 删除环境请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.DeleteEnvironmentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 删除环境
+      tags:
+      - environments
+    post:
+      consumes:
+      - application/json
+      description: 获取指定名称的环境的状态信息
+      parameters:
+      - description: 环境名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 获取环境信息请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.GetEnvironmentRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/main.APIResponse'
+            - properties:
+                data:
+                  additionalProperties: true
+                  type: object
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 获取环境信息
+      tags:
+      - environments
+  /service-accounts/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定的ServiceAccount及其相关权限配置（Role、RoleBinding、ResourceQuota）
       parameters:
       - description: ServiceAccount名称
         in: path
-        name: serviceAccount
+        name: name
         required: true
         type: string
-      - description: 用于操作的kubeconfig内容
-        in: query
-        name: kubeconfig
+      - description: 删除ServiceAccount请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.DeleteServiceAccountRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 删除ServiceAccount
+      tags:
+      - service-accounts
+    post:
+      consumes:
+      - application/json
+      description: 创建指定的ServiceAccount，分配权限，并返回对应的kubeconfig
+      parameters:
+      - description: ServiceAccount名称
+        in: path
+        name: name
         required: true
         type: string
-      - default: default
-        description: SA所在的namespace
-        in: query
-        name: namespace
-        type: string
-      - default: true
-        description: 如果SA不存在是否创建
-        in: query
-        name: create_if_not_exists
-        type: boolean
-      - description: 默认资源配额
-        in: query
-        name: resource_quota
-        type: string
+      - description: 创建ServiceAccount请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.KubeconfigRequest'
       produces:
       - application/json
       responses:
@@ -181,9 +528,9 @@ paths:
           description: 服务器内部错误
           schema:
             $ref: '#/definitions/main.APIResponse'
-      summary: 获取ServiceAccount的kubeconfig
+      summary: 创建ServiceAccount并返回kubeconfig
       tags:
-      - kubeconfig
+      - service-accounts
 securityDefinitions:
   BearerAuth:
     in: header

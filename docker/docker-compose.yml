@@ -14,7 +14,8 @@ services:
       - PORT=8080
       - GIN_MODE=release
       # 设置 NODE_IP 环境变量，请根据实际情况修改
-      - NODE_IP=${NODE_IP:-192.168.248.151}
+      - NODE_IP=${NODE_IP:-192.168.248.51}
+      - SWAGGER_HOST=127.0.0.1:8080
     volumes:
       # 日志目录（可选）
       - ./logs:/app/logs

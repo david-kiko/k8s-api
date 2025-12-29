@@ -22,6 +22,7 @@ type CreateEnvironmentRequest struct {
 	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
 	Name       string `json:"name" binding:"required" example:"demo"`
 	Namespace  string `json:"namespace" example:"dev-space" note:"可选，默认使用kubeconfig中的namespace"`
+	Image      string `json:"image" binding:"required" example:"registry.km.top/kmai/ubuntu:22.04-ide"`
 	// 以下字段由系统从kubeconfig中解析，不需要用户传入
 	SAName     string `json:"-"` // 从kubeconfig中提取的ServiceAccount名称
 	Resources  struct {
@@ -38,7 +39,9 @@ type CreateEnvironmentRequest struct {
 		VSCode   int `json:"vscode" example:"0"`
 		SSH      int `json:"ssh" example:"0"`
 		Terminal int `json:"terminal" example:"0"`
+		OpenCode int `json:"opencode" example:"0"`
 	} `json:"nodeports"`
+	KMCODEConfig map[string]interface{} `json:"kmcode_config,omitempty" note:"可选，KMCODE配置，将转换为JSON字符串传入pod"`
 }
 
 // KubeconfigRequest 创建ServiceAccount请求参数
@@ -235,6 +238,21 @@ func CreateEnvironment(c *gin.Context) {
 
 	// 设置NodePorts默认值（如果是零值）
 	setNodePortsDefaults(&req)
+
+	// 🔍 在创建前进行资源预检查
+	fmt.Printf("🔍 开始创建前资源预检查...\n")
+	if err := validateResourcesBeforeCreate(clientset, req); err != nil {
+		fmt.Printf("❌ 资源预检查失败: %v\n", err)
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "资源预检查失败: " + err.Error(),
+			Data: map[string]interface{}{
+				"validation_step": "pre_check_failed",
+				"error_type":     "resource_validation_error",
+			},
+		})
+		return
+	}
 
 	// 创建PVC
 	err = createPVCs(ctx, clientset, req)
@@ -826,7 +844,10 @@ func GetEnvironment(c *gin.Context) {
 					accessURLs["vscode"] = vscodeInfo
 				case "ssh":
 					sshInfo := map[string]interface{}{
-						"command": fmt.Sprintf("ssh root@%s -p %d", nodeIP, nodePort),
+						"ip":       nodeIP,
+						"port":     nodePort,
+						"user":     "root",
+						"protocol": "ssh",
 					}
 					if password, ok := passwordInfo["ssh"]; ok {
 						sshInfo["password"] = password
@@ -841,9 +862,14 @@ func GetEnvironment(c *gin.Context) {
 					}
 					// 如果没有 TTYD_PASSWORD，就不设置 password 字段，表示无密码
 					accessURLs["terminal"] = terminalInfo
+				case "opencode":
+					opencodeInfo := map[string]interface{}{
+						"url": fmt.Sprintf("http://%s:%d", nodeIP, nodePort),
+					}
+					accessURLs["opencode"] = opencodeInfo
 				}
 			}
-			accessInfo["urls"] = accessURLs
+			accessInfo["services"] = accessURLs
 			if nodeIP == "<node-ip>" {
 				accessInfo["note"] = "请设置 NODE_IP 环境变量或手动替换 <node-ip> 为实际的服务器IP地址"
 			} else {
@@ -1033,5 +1059,698 @@ func createService(ctx context.Context, clientset *kubernetes.Clientset, req Cre
 	} else {
 		fmt.Printf("✅ Service %s 已创建\n", serviceObj.Name)
 	}
+	return nil
+}
+
+// ==================== 简化版List接口实现 ====================
+
+// ListEnvironmentsRequest 列出环境请求（简化版）
+type ListEnvironmentsRequest struct {
+	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
+	Namespace  string `json:"namespace,omitempty" example:"dev-space"`           // 可选，不指定则用kubeconfig中的
+	Page       int    `json:"page,omitempty" example:"1" default:"1"`            // 页码，从1开始
+	PageSize   int    `json:"page_size,omitempty" example:"20" default:"20"`     // 每页大小
+}
+
+// ListServiceAccountsRequest 列出ServiceAccount请求（简化版）
+type ListServiceAccountsRequest struct {
+	Kubeconfig string `json:"kubeconfig,omitempty" example:"apiVersion: v1\nkind: Config\n..."` // 可选，不提供则用管理员kubeconfig
+	Namespace  string `json:"namespace,omitempty" example:"dev-space"`                         // 可选，不指定则列所有命名空间
+	Page       int    `json:"page,omitempty" example:"1" default:"1"`                          // 页码，从1开始
+	PageSize   int    `json:"page_size,omitempty" example:"20" default:"20"`                   // 每页大小
+}
+
+// ListEnvironments @Summary 列出环境（简化版）
+// @Description 列出用户有权限访问的所有环境，支持分页和简单的命名空间过滤
+// @Tags environments
+// @Accept json
+// @Produce json
+// @Param request body ListEnvironmentsRequest true "列出环境请求"
+// @Success 200 {object} APIResponse "成功，data中包含环境列表"
+// @Failure 400 {object} APIResponse "请求参数错误"
+// @Failure 500 {object} APIResponse "服务器内部错误"
+// @Router /environments/list [post]
+func ListEnvironments(c *gin.Context) {
+	var req ListEnvironmentsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "请求参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 设置默认值
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 20
+	}
+	if req.PageSize > 100 {
+		req.PageSize = 100 // 限制最大每页数量
+	}
+
+	// 复用现有的kubeconfig处理逻辑
+	clientset, err := createK8sClientFromKubeconfig(req.Kubeconfig)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "创建k8s客户端失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 从kubeconfig中获取命名空间
+	config, err := clientcmd.Load([]byte(req.Kubeconfig))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "解析kubeconfig失败: " + err.Error(),
+		})
+		return
+	}
+
+	currentContext := config.Contexts[config.CurrentContext]
+	if currentContext == nil {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "找不到当前上下文",
+		})
+		return
+	}
+
+	namespace := req.Namespace
+	if namespace == "" {
+		namespace = currentContext.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+	}
+
+	ctx := context.Background()
+
+	// 复用现有的Deployment查询逻辑，但改为List
+	deployments, err := clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "获取环境列表失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 构建环境列表
+	var environments []map[string]interface{}
+	for _, deployment := range deployments.Items {
+		// 检查是否是我们的环境（通过标签判断）
+		if deployment.Labels["type"] != "dev-env" {
+			continue
+		}
+
+		// 复用GetEnvironment中的状态检查逻辑
+		envStatus := make(map[string]interface{})
+
+		// 检查Deployment状态
+		deploymentReady := deployment.Status.ReadyReplicas == *deployment.Spec.Replicas
+		envStatus["deployment"] = map[string]interface{}{
+			"exists": true,
+			"ready":  deploymentReady,
+		}
+
+		// 检查Service状态（简化版）
+		services, err := clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", deployment.Labels["app"]),
+		})
+
+		var serviceInfo []map[string]interface{}
+		if err == nil && len(services.Items) > 0 {
+			for _, service := range services.Items {
+				info := map[string]interface{}{
+					"name": service.Name,
+					"type": string(service.Spec.Type),
+				}
+				if service.Spec.Type == corev1.ServiceTypeNodePort && len(service.Spec.Ports) > 0 {
+					info["node_port"] = service.Spec.Ports[0].NodePort
+				}
+				serviceInfo = append(serviceInfo, info)
+			}
+		}
+
+		envStatus["services"] = serviceInfo
+
+		// 简化版状态判断
+		overallStatus := "Running"
+		if !deploymentReady {
+			overallStatus = "Creating"
+		}
+		if len(serviceInfo) == 0 {
+			overallStatus = "Partial"
+		}
+
+		// 构建环境信息
+		envInfo := map[string]interface{}{
+			"name":       deployment.Name,
+			"namespace":  deployment.Namespace,
+			"status":     overallStatus,
+			"created_at": deployment.CreationTimestamp.Format("2006-01-02T15:04:05Z"),
+			"labels":     deployment.Labels,
+			"details":    envStatus,
+		}
+
+		// 添加镜像信息
+		if len(deployment.Spec.Template.Spec.Containers) > 0 {
+			envInfo["image"] = deployment.Spec.Template.Spec.Containers[0].Image
+		}
+
+		environments = append(environments, envInfo)
+	}
+
+	// 简单的内存分页
+	total := len(environments)
+	totalPages := (total + req.PageSize - 1) / req.PageSize
+	start := (req.Page - 1) * req.PageSize
+	end := start + req.PageSize
+	if end > total {
+		end = total
+	}
+
+	var pagedEnvironments []map[string]interface{}
+	if start < total {
+		pagedEnvironments = environments[start:end]
+	} else {
+		pagedEnvironments = []map[string]interface{}{}
+	}
+
+	// 构建响应数据
+	responseData := map[string]interface{}{
+		"environments": pagedEnvironments,
+		"pagination": map[string]interface{}{
+			"current_page": req.Page,
+			"page_size":    req.PageSize,
+			"total_items":  total,
+			"total_pages":  totalPages,
+			"has_next":     req.Page < totalPages,
+			"has_prev":     req.Page > 1,
+		},
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("成功获取环境列表，共 %d 个环境", total),
+		Data:    responseData,
+	})
+}
+
+// ListServiceAccounts @Summary 列出ServiceAccount（简化版）
+// @Description 列出用户有权限查看的ServiceAccount，支持分页和命名空间过滤
+// @Tags service-accounts
+// @Accept json
+// @Produce json
+// @Param request body ListServiceAccountsRequest true "列出ServiceAccount请求"
+// @Success 200 {object} APIResponse "成功，data中包含ServiceAccount列表"
+// @Failure 400 {object} APIResponse "请求参数错误"
+// @Failure 500 {object} APIResponse "服务器内部错误"
+// @Router /service-accounts/list [post]
+func ListServiceAccounts(c *gin.Context) {
+	var req ListServiceAccountsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "请求参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 设置默认值
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 {
+		req.PageSize = 20
+	}
+	if req.PageSize > 100 {
+		req.PageSize = 100 // 限制最大每页数量
+	}
+
+	// 复用现有的kubeconfig处理逻辑
+	var clientset *kubernetes.Clientset
+	var err error
+
+	if req.Kubeconfig != "" {
+		// 使用传入的kubeconfig
+		clientset, err = createK8sClientFromKubeconfig(req.Kubeconfig)
+	} else {
+		// 使用管理员kubeconfig（复用CreateServiceAccount中的逻辑）
+		clientset, err = createK8sClientFromKubeconfig("")
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "创建k8s客户端失败: " + err.Error(),
+		})
+		return
+	}
+
+	ctx := context.Background()
+
+	var namespaces []string
+	if req.Namespace != "" {
+		namespaces = []string{req.Namespace}
+	} else {
+		// 获取所有命名空间
+		nsList, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, APIResponse{
+				Success: false,
+				Message: "获取命名空间列表失败: " + err.Error(),
+			})
+			return
+		}
+		for _, ns := range nsList.Items {
+			// 跳过系统命名空间
+			if !strings.HasPrefix(ns.Name, "kube-") && ns.Name != "kube-public" && ns.Name != "kube-node-lease" {
+				namespaces = append(namespaces, ns.Name)
+			}
+		}
+	}
+
+	// 获取所有ServiceAccount
+	var serviceAccounts []map[string]interface{}
+	for _, ns := range namespaces {
+		saList, err := clientset.CoreV1().ServiceAccounts(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			fmt.Printf("获取命名空间 %s 的ServiceAccount失败: %v\n", ns, err)
+			continue
+		}
+
+		for _, sa := range saList.Items {
+			// 跳过系统ServiceAccount
+			if strings.HasPrefix(sa.Name, "default") || strings.HasPrefix(sa.Name, "kube-") {
+				continue
+			}
+
+			// 统计该SA的环境数量（简化版）
+			envCount := 0
+			deploymentList, err := clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("service-account=%s", sa.Name),
+			})
+			if err == nil {
+				envCount = len(deploymentList.Items)
+			}
+
+			saInfo := map[string]interface{}{
+				"name":             sa.Name,
+				"namespace":        sa.Namespace,
+				"created_at":       sa.CreationTimestamp.Format("2006-01-02T15:04:05Z"),
+				"environment_count": envCount,
+				"labels":           sa.Labels,
+			}
+
+			serviceAccounts = append(serviceAccounts, saInfo)
+		}
+	}
+
+	// 简单的内存分页
+	total := len(serviceAccounts)
+	totalPages := (total + req.PageSize - 1) / req.PageSize
+	start := (req.Page - 1) * req.PageSize
+	end := start + req.PageSize
+	if end > total {
+		end = total
+	}
+
+	var pagedServiceAccounts []map[string]interface{}
+	if start < total {
+		pagedServiceAccounts = serviceAccounts[start:end]
+	} else {
+		pagedServiceAccounts = []map[string]interface{}{}
+	}
+
+	// 构建响应数据
+	responseData := map[string]interface{}{
+		"service_accounts": pagedServiceAccounts,
+		"pagination": map[string]interface{}{
+			"current_page": req.Page,
+			"page_size":    req.PageSize,
+			"total_items":  total,
+			"total_pages":  totalPages,
+			"has_next":     req.Page < totalPages,
+			"has_prev":     req.Page > 1,
+		},
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("成功获取ServiceAccount列表，共 %d 个ServiceAccount", total),
+		Data:    responseData,
+	})
+}
+
+// ==================== 资源预检查功能 ====================
+
+// validateResourcesBeforeCreate 在创建环境前进行资源验证
+func validateResourcesBeforeCreate(clientset *kubernetes.Clientset, req CreateEnvironmentRequest) error {
+	fmt.Printf("🔍 开始资源预检查...\n")
+
+	// 1. 检查命名空间是否存在
+	if err := validateNamespace(clientset, req.Namespace); err != nil {
+		return fmt.Errorf("命名空间验证失败: %v", err)
+	}
+
+	// 2. 检查命名空间资源配额
+	if err := validateNamespaceResourceQuota(clientset, req); err != nil {
+		return fmt.Errorf("资源配额不足: %v", err)
+	}
+
+	// 3. 使用DryRun验证PVC创建
+	if err := validatePVCWithDryRun(clientset, req); err != nil {
+		return fmt.Errorf("PVC资源验证失败: %v", err)
+	}
+
+	// 4. 使用DryRun验证Pod资源
+	if err := validatePodWithDryRun(clientset, req); err != nil {
+		return fmt.Errorf("Pod资源验证失败: %v", err)
+	}
+
+	// 5. 检查镜像是否存在
+	if err := validateImageAvailability(clientset, req.Image); err != nil {
+		return fmt.Errorf("镜像验证失败: %v", err)
+	}
+
+	fmt.Printf("✅ 资源预检查通过\n")
+	return nil
+}
+
+// validateNamespace 验证命名空间是否存在
+func validateNamespace(clientset *kubernetes.Clientset, namespace string) error {
+	if namespace == "" {
+		return fmt.Errorf("命名空间不能为空")
+	}
+
+	_, err := clientset.CoreV1().Namespaces().Get(context.Background(), namespace, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("命名空间 '%s' 不存在或无权限访问: %v", namespace, err)
+	}
+
+	fmt.Printf("✅ 命名空间 '%s' 验证通过\n", namespace)
+	return nil
+}
+
+// validateNamespaceResourceQuota 检查命名空间资源配额
+func validateNamespaceResourceQuota(clientset *kubernetes.Clientset, req CreateEnvironmentRequest) error {
+	// 获取所有ResourceQuota
+	quotas, err := clientset.CoreV1().ResourceQuotas(req.Namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		// 没有ResourceQuota，说明没有限制，直接通过
+		fmt.Printf("ℹ️  命名空间 '%s' 没有资源配额限制\n", req.Namespace)
+		return nil
+	}
+
+	if len(quotas.Items) == 0 {
+		fmt.Printf("ℹ️  命名空间 '%s' 没有资源配额限制\n", req.Namespace)
+		return nil
+	}
+
+	// 检查每个ResourceQuota
+	for _, quota := range quotas.Items {
+		if err := checkSingleResourceQuota(&quota, req); err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf("✅ 资源配额验证通过\n")
+	return nil
+}
+
+// checkSingleResourceQuota 检查单个ResourceQuota
+func checkSingleResourceQuota(quota *corev1.ResourceQuota, req CreateEnvironmentRequest) error {
+	if quota.Spec.Hard == nil {
+		return nil // 没有硬限制
+	}
+
+	// 检查CPU资源
+	cpuRequest, err := resource.ParseQuantity(req.Resources.CPU)
+	if err != nil {
+		return fmt.Errorf("无效的CPU请求值: %v", err)
+	}
+
+	if hardCPU, exists := quota.Spec.Hard[corev1.ResourceLimitsCPU]; exists {
+		usedCPU := quota.Status.Used[corev1.ResourceLimitsCPU]
+		if usedCPU.Cmp(resource.MustParse("0")) != 0 {
+			remainingCPU := hardCPU.DeepCopy()
+			remainingCPU.Sub(usedCPU)
+			if remainingCPU.Cmp(cpuRequest) < 0 {
+				return fmt.Errorf("CPU资源不足: 需要%s, 剩余可用%s (配额: %s, 已用: %s)",
+					cpuRequest.String(),
+					remainingCPU.String(),
+					hardCPU.String(),
+					usedCPU.String())
+			}
+		}
+	}
+
+	// 检查内存资源
+	memoryRequest, err := resource.ParseQuantity(req.Resources.Memory)
+	if err != nil {
+		return fmt.Errorf("无效的内存请求值: %v", err)
+	}
+
+	if hardMemory, exists := quota.Spec.Hard[corev1.ResourceLimitsMemory]; exists {
+		usedMemory := quota.Status.Used[corev1.ResourceLimitsMemory]
+		if usedMemory.Cmp(resource.MustParse("0")) != 0 {
+			remainingMemory := hardMemory.DeepCopy()
+			remainingMemory.Sub(usedMemory)
+			if remainingMemory.Cmp(memoryRequest) < 0 {
+				return fmt.Errorf("内存资源不足: 需要%s, 剩余可用%s (配额: %s, 已用: %s)",
+					memoryRequest.String(),
+					remainingMemory.String(),
+					hardMemory.String(),
+					usedMemory.String())
+			}
+		}
+	}
+
+	// 检查存储资源
+	workspaceStorage, err := resource.ParseQuantity(req.Storage.Workspace)
+	if err != nil {
+		return fmt.Errorf("无效的工作区存储值: %v", err)
+	}
+
+	vscodeStorage, err := resource.ParseQuantity(req.Storage.VSCode)
+	if err != nil {
+		return fmt.Errorf("无效的VSCode存储值: %v", err)
+	}
+
+	totalStorage := workspaceStorage.DeepCopy()
+	totalStorage.Add(vscodeStorage)
+
+	if hardStorage, exists := quota.Spec.Hard["requests.storage"]; exists {
+		usedStorage := quota.Status.Used["requests.storage"]
+		if usedStorage.Cmp(resource.MustParse("0")) != 0 {
+			remainingStorage := hardStorage.DeepCopy()
+			remainingStorage.Sub(usedStorage)
+			if remainingStorage.Cmp(totalStorage) < 0 {
+				return fmt.Errorf("存储资源不足: 需要%s, 剩余可用%s (配额: %s, 已用: %s)",
+					totalStorage.String(),
+					remainingStorage.String(),
+					hardStorage.String(),
+					usedStorage.String())
+			}
+		}
+	}
+
+	// 检查Pod数量
+	if hardPods, exists := quota.Spec.Hard[corev1.ResourcePods]; exists {
+		usedPods := quota.Status.Used[corev1.ResourcePods]
+		if usedPods.Cmp(resource.MustParse("0")) != 0 {
+			remainingPods := hardPods.DeepCopy()
+			remainingPods.Sub(usedPods)
+			if remainingPods.Cmp(resource.MustParse("1")) < 0 {
+				return fmt.Errorf("Pod数量不足: 需要1个Pod, 剩余可用%s (配额: %s, 已用: %s)",
+					remainingPods.String(),
+					hardPods.String(),
+					usedPods.String())
+			}
+		}
+	}
+
+	fmt.Printf("✅ ResourceQuota '%s' 验证通过\n", quota.Name)
+	return nil
+}
+
+// validatePVCWithDryRun 使用DryRun验证PVC创建
+func validatePVCWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmentRequest) error {
+	// 验证工作区PVC
+	workspacePVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      req.Name + "-workspace",
+			Namespace: req.Namespace,
+			Labels: map[string]string{
+				"app": req.Name,
+				"type": "workspace-storage",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{
+				corev1.ReadWriteOnce,
+			},
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(req.Storage.Workspace),
+				},
+			},
+			StorageClassName: func() *string { s := "local"; return &s }(),
+		},
+	}
+
+	_, err := clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Create(
+		context.Background(), workspacePVC, metav1.CreateOptions{DryRun: []string{"All"}})
+	if err != nil {
+		return fmt.Errorf("工作区PVC创建验证失败: %v", err)
+	}
+
+	// 验证VSCode PVC
+	vscodePVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      req.Name + "-vscode",
+			Namespace: req.Namespace,
+			Labels: map[string]string{
+				"app": req.Name,
+				"type": "vscode-storage",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{
+				corev1.ReadWriteOnce,
+			},
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(req.Storage.VSCode),
+				},
+			},
+			StorageClassName: func() *string { s := "local"; return &s }(),
+		},
+	}
+
+	_, err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Create(
+		context.Background(), vscodePVC, metav1.CreateOptions{DryRun: []string{"All"}})
+	if err != nil {
+		return fmt.Errorf("VSCode PVC创建验证失败: %v", err)
+	}
+
+	fmt.Printf("✅ PVC资源验证通过 (workspace: %s, vscode: %s)\n", req.Storage.Workspace, req.Storage.VSCode)
+	return nil
+}
+
+// validatePodWithDryRun 使用DryRun验证Pod资源
+func validatePodWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmentRequest) error {
+	// 创建一个临时的Pod用于验证
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      req.Name + "-validation",
+			Namespace: req.Namespace,
+			Labels: map[string]string{
+				"app":  req.Name,
+				"type": "validation-pod",
+			},
+		},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: req.SAName,
+			Containers: []corev1.Container{
+				{
+					Name:  req.Name,
+					Image: req.Image,
+					Ports: []corev1.ContainerPort{
+						{
+							ContainerPort: 8080,
+							Protocol:      corev1.ProtocolTCP,
+						},
+						{
+							ContainerPort: 22,
+							Protocol:      corev1.ProtocolTCP,
+						},
+						{
+							ContainerPort: 7681,
+							Protocol:      corev1.ProtocolTCP,
+						},
+						{
+							ContainerPort: 4096,
+							Protocol:      corev1.ProtocolTCP,
+						},
+					},
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse(req.Resources.CPU),
+							corev1.ResourceMemory: resource.MustParse(req.Resources.Memory),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse(req.Resources.CPULimit),
+							corev1.ResourceMemory: resource.MustParse(req.Resources.MemoryLimit),
+						},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "workspace-storage",
+							MountPath: "/workspace",
+						},
+						{
+							Name:      "vscode-storage",
+							MountPath: "/root/.vscode-server",
+						},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "workspace-storage",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: req.Name + "-workspace",
+						},
+					},
+				},
+				{
+					Name: "vscode-storage",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: req.Name + "-vscode",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := clientset.CoreV1().Pods(req.Namespace).Create(
+		context.Background(), pod, metav1.CreateOptions{DryRun: []string{"All"}})
+	if err != nil {
+		return fmt.Errorf("Pod资源验证失败: %v", err)
+	}
+
+	fmt.Printf("✅ Pod资源验证通过 (镜像: %s, CPU: %s/%s, 内存: %s/%s)\n",
+		req.Image, req.Resources.CPU, req.Resources.CPULimit, req.Resources.Memory, req.Resources.MemoryLimit)
+	return nil
+}
+
+// validateImageAvailability 验证镜像是否可用（简化版）
+func validateImageAvailability(clientset *kubernetes.Clientset, imageName string) error {
+	// 基础验证
+	if imageName == "" {
+		return fmt.Errorf("镜像名称不能为空")
+	}
+
+	// 检查镜像格式
+	if !strings.Contains(imageName, ":") {
+		imageName += ":latest"
+	}
+
+	// 这里可以添加更复杂的镜像可用性检查，比如：
+	// 1. 检查镜像是否在镜像仓库中存在
+	// 2. 检查当前节点是否能拉取该镜像
+	// 3. 检查镜像大小是否符合要求
+
+	fmt.Printf("✅ 镜像格式验证通过: %s\n", imageName)
 	return nil
 }

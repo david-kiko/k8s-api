@@ -3,11 +3,13 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 	_ "k8s-resource-api/docs/swagger"
+	docs "k8s-resource-api/docs/swagger"
 )
 
 // @title K8S Resource API
@@ -30,6 +32,21 @@ import (
 // @name Authorization
 
 func main() {
+	// 动态配置Swagger host
+	// 只有设置了SWAGGER_HOST环境变量才替换，否则保持默认值localhost:8080
+	if swaggerHost := os.Getenv("SWAGGER_HOST"); swaggerHost != "" {
+		docs.SwaggerInfo.Host = swaggerHost
+		log.Printf("Swagger host configured from environment: %s", swaggerHost)
+	} else {
+		log.Printf("SWAGGER_HOST not set, using default host: localhost:8080")
+	}
+
+	// 可选：动态设置scheme
+	if scheme := os.Getenv("SWAGGER_SCHEME"); scheme != "" {
+		docs.SwaggerInfo.Schemes = []string{scheme}
+		log.Printf("Swagger scheme configured from environment: %s", scheme)
+	}
+
 	// 创建Gin路由
 	r := gin.Default()
 
@@ -53,11 +70,13 @@ func main() {
 		// ServiceAccount管理
 		v1.POST("/service-accounts/:name", CreateServiceAccount)
 		v1.DELETE("/service-accounts/:name", DeleteServiceAccount)
+		v1.POST("/service-accounts/list", ListServiceAccounts)
 
 	// 环境管理
 		v1.POST("/environments", CreateEnvironment)
 		v1.POST("/environments/:name", GetEnvironment)
 		v1.DELETE("/environments/:name", DeleteEnvironment)
+		v1.POST("/environments/list", ListEnvironments)
 	}
 
 	// Swagger文档

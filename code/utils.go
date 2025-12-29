@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -19,6 +20,27 @@ import (
 
 // generateDeploymentYAML 生成Deployment的YAML
 func generateDeploymentYAML(req CreateEnvironmentRequest) string {
+	// 生成基础环境变量部分
+	envVars := `        env:
+        - name: ACCESS_PASSWORD
+          value: "8Dd8dw8k"
+        - name: ROOT_PASSWORD
+          value: "8Dd8dw8k"
+        - name: WORKSPACE_DIR
+          value: "/workspace"`
+
+	// 如果提供了 KMCODEConfig，添加到环境变量中
+	if req.KMCODEConfig != nil {
+		// 将 map 转换为 JSON 字符串
+		if configBytes, err := json.Marshal(req.KMCODEConfig); err == nil {
+			// 转义 JSON 字符串中的特殊字符，特别是单引号
+			configStr := strings.ReplaceAll(string(configBytes), "'", "''")
+			envVars += fmt.Sprintf(`
+        - name: KMCODE_CONFIG
+          value: '%s'`, configStr)
+		}
+	}
+
 	template := `---
 apiVersion: apps/v1
 kind: Deployment
@@ -42,18 +64,13 @@ spec:
       serviceAccountName: %s
       containers:
       - name: dev-environment
-        image: registry.opsman.top/kmai/ubuntu:22.04-ide
+        image: %s
         ports:
         - containerPort: 8080  # VS Code Web Interface
         - containerPort: 22    # SSH
         - containerPort: 7681  # Web Terminal
-        env:
-        - name: ACCESS_PASSWORD
-          value: "8Dd8dw8k"
-        - name: ROOT_PASSWORD
-          value: "8Dd8dw8k"
-        - name: WORKSPACE_DIR
-          value: "/workspace"
+        - containerPort: 4096  # OpenCode Service
+%s
         resources:
           requests:
             cpu: "%s"
@@ -96,7 +113,7 @@ spec:
           claimName: %s-vscode`
 
 	return fmt.Sprintf(template,
-		req.Name, req.Namespace, req.Name, req.Name, req.Name, req.SAName,
+		req.Name, req.Namespace, req.Name, req.Name, req.Name, req.SAName, req.Image, envVars,
 		req.Resources.CPU, req.Resources.Memory,
 		req.Resources.CPULimit, req.Resources.MemoryLimit,
 		req.Name, req.Name)
@@ -132,11 +149,16 @@ spec:
     port: 7681
     targetPort: 7681
     nodePort: %d
+    protocol: TCP
+  - name: opencode
+    port: 4096
+    targetPort: 4096
+    nodePort: %d
     protocol: TCP`
 
 	return fmt.Sprintf(template,
 		req.Name, req.Namespace, req.Name, req.Name,
-		req.NodePorts.VSCode, req.NodePorts.SSH, req.NodePorts.Terminal)
+		req.NodePorts.VSCode, req.NodePorts.SSH, req.NodePorts.Terminal, req.NodePorts.OpenCode)
 }
 
 // generateSAKubeconfig 为ServiceAccount生成kubeconfig（不创建权限，权限应该已经存在）
@@ -562,6 +584,9 @@ func setNodePortsDefaults(req *CreateEnvironmentRequest) {
 	}
 	if req.NodePorts.Terminal == 0 {
 		req.NodePorts.Terminal = 0 // 明确设置为0，表示k8s自动分配
+	}
+	if req.NodePorts.OpenCode == 0 {
+		req.NodePorts.OpenCode = 0 // 明确设置为0，表示k8s自动分配
 	}
 }
 
