@@ -32,9 +32,8 @@ type CreateEnvironmentRequest struct {
 		MemoryLimit string `json:"memory_limit" binding:"required" example:"4Gi"`
 	} `json:"resources" binding:"required"`
 	Storage struct {
-		Workspace string `json:"workspace" binding:"required" example:"10Gi"`
-		VSCode    string `json:"vscode" binding:"required" example:"5Gi"`
-	} `json:"storage" binding:"required"`
+		Workspace string `json:"workspace" example:"10Gi" note:"可选，默认1Gi"`
+	} `json:"storage,omitempty"`
 	NodePorts struct {
 		VSCode   int `json:"vscode" example:"0"`
 		SSH      int `json:"ssh" example:"0"`
@@ -60,8 +59,32 @@ type KubeconfigRequest struct {
 
 // DeleteEnvironmentRequest 删除环境请求参数
 type DeleteEnvironmentRequest struct {
+	Kubeconfig     string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
+	Namespace      string `json:"namespace" binding:"required" example:"dev-space"`
+	DeleteStorage  bool   `json:"delete_storage" example:"false" note:"是否删除存储，默认false（保留PVC以便下次复用）"`
+}
+
+// DeletePVCRequest 删除PVC请求参数
+type DeletePVCRequest struct {
 	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
 	Namespace  string `json:"namespace" binding:"required" example:"dev-space"`
+}
+
+// ListPVCsRequest 列出PVC请求参数
+type ListPVCsRequest struct {
+	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
+	Namespace  string `json:"namespace" example:"dev-space" note:"可选，不指定则列所有命名空间"`
+	Filter     string `json:"filter" example:"demo" note:"可选，按名称前缀过滤"`
+}
+
+// PVCInfo PVC信息
+type PVCInfo struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Status    string `json:"status"`
+	Capacity  string `json:"capacity"`
+	AccessModes []string `json:"access_modes"`
+	Age       string `json:"age"`
 }
 
 // GetEnvironmentRequest 获取环境信息请求参数
@@ -238,6 +261,12 @@ func CreateEnvironment(c *gin.Context) {
 
 	// 设置NodePorts默认值（如果是零值）
 	setNodePortsDefaults(&req)
+
+	// 设置Storage workspace默认值（如果是空值）
+	if req.Storage.Workspace == "" {
+		req.Storage.Workspace = "1Gi"
+		fmt.Printf("🔍 调试信息: storage.workspace为空，设置为默认值='1Gi'\n")
+	}
 
 	// 🔍 在创建前进行资源预检查
 	fmt.Printf("🔍 开始创建前资源预检查...\n")
@@ -552,7 +581,7 @@ func DeleteServiceAccount(c *gin.Context) {
 
 // DeleteEnvironment 删除环境
 // @Summary 删除环境
-// @Description 删除指定名称的环境，包括PVC、Deployment和Service
+// @Description 删除指定名称的环境，包括Deployment和Service。可通过delete_storage参数控制是否删除PVC
 // @Tags environments
 // @Accept json
 // @Produce json
@@ -613,9 +642,10 @@ func DeleteEnvironment(c *gin.Context) {
 		return
 	}
 
-	// 删除PVCs
-	pvcs := []string{envName + "-workspace", envName + "-vscode"}
-	for _, pvcName := range pvcs {
+	// 根据参数决定是否删除PVC
+	if req.DeleteStorage {
+		// 删除workspace PVC
+		pvcName := envName + "-workspace"
 		err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Delete(ctx, pvcName, metav1.DeleteOptions{})
 		if err != nil && !isNotFoundError(err) {
 			c.JSON(http.StatusInternalServerError, APIResponse{
@@ -624,11 +654,176 @@ func DeleteEnvironment(c *gin.Context) {
 			})
 			return
 		}
+
+		c.JSON(http.StatusOK, APIResponse{
+			Success: true,
+			Message: "环境删除成功（PVC已删除）",
+		})
+	} else {
+		c.JSON(http.StatusOK, APIResponse{
+			Success: true,
+			Message: "环境删除成功（PVC已保留，可重新创建环境复用）",
+		})
+	}
+}
+
+// DeletePVC 删除PVC
+// @Summary 删除PVC
+// @Description 删除指定环境的PVC（警告：此操作不可逆，数据将永久丢失）
+// @Tags pvcs
+// @Accept json
+// @Produce json
+// @Param name path string true "环境名称"
+// @Param request body DeletePVCRequest true "删除PVC请求参数"
+// @Success 200 {object} APIResponse "成功"
+// @Failure 400 {object} APIResponse "请求参数错误"
+// @Failure 500 {object} APIResponse "服务器内部错误"
+// @Router /pvcs/{name} [delete]
+func DeletePVC(c *gin.Context) {
+	var req DeletePVCRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "请求参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	envName := c.Param("name")
+	if envName == "" {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "环境名称不能为空",
+		})
+		return
+	}
+
+	// 创建k8s客户端
+	clientset, err := createK8sClientFromKubeconfig(req.Kubeconfig)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "创建k8s客户端失败: " + err.Error(),
+		})
+		return
+	}
+
+	ctx := context.Background()
+
+	// 删除workspace PVC
+	pvcName := envName + "-workspace"
+	err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Delete(ctx, pvcName, metav1.DeleteOptions{})
+	if err != nil && !isNotFoundError(err) {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: fmt.Sprintf("删除PVC %s 失败: %v", pvcName, err),
+		})
+		return
+	}
+
+	if isNotFoundError(err) {
+		c.JSON(http.StatusOK, APIResponse{
+			Success: true,
+			Message: fmt.Sprintf("PVC %s 不存在，无需删除", pvcName),
+		})
+		return
 	}
 
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
-		Message: "环境删除成功",
+		Message: "PVC删除成功",
+	})
+}
+
+// ListPVCs 列出PVC
+// @Summary 列出PVC
+// @Description 列出PVC，支持按命名空间和名称前缀过滤
+// @Tags pvcs
+// @Accept json
+// @Produce json
+// @Param request body ListPVCsRequest true "列出PVC请求参数"
+// @Success 200 {object} APIResponse{data=[]PVCInfo} "成功"
+// @Failure 400 {object} APIResponse "请求参数错误"
+// @Failure 500 {object} APIResponse "服务器内部错误"
+// @Router /pvcs/list [post]
+func ListPVCs(c *gin.Context) {
+	var req ListPVCsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, APIResponse{
+			Success: false,
+			Message: "请求参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 创建k8s客户端
+	clientset, err := createK8sClientFromKubeconfig(req.Kubeconfig)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "创建k8s客户端失败: " + err.Error(),
+		})
+		return
+	}
+
+	ctx := context.Background()
+
+	var pvcs *corev1.PersistentVolumeClaimList
+	if req.Namespace == "" {
+		// 列出所有命名空间的PVC
+		pvcs, err = clientset.CoreV1().PersistentVolumeClaims("").List(ctx, metav1.ListOptions{})
+	} else {
+		// 列出指定命名空间的PVC
+		pvcs, err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).List(ctx, metav1.ListOptions{})
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Message: "获取PVC列表失败: " + err.Error(),
+		})
+		return
+	}
+
+	// 转换为PVCInfo列表
+	var pvcInfos []PVCInfo
+	for _, pvc := range pvcs.Items {
+		// 按名称前缀过滤
+		if req.Filter != "" && !strings.HasPrefix(pvc.Name, req.Filter) {
+			continue
+		}
+
+		capacity := ""
+		if storage := pvc.Spec.Resources.Requests.Storage(); storage != nil {
+			capacity = storage.String()
+		}
+
+		var accessModes []string
+		for _, am := range pvc.Spec.AccessModes {
+			accessModes = append(accessModes, string(am))
+		}
+
+		age := pvc.CreationTimestamp.Format("2006-01-02 15:04:05")
+
+		status := "Bound"
+		if pvc.Status.Phase != "" {
+			status = string(pvc.Status.Phase)
+		}
+
+		pvcInfos = append(pvcInfos, PVCInfo{
+			Name:        pvc.Name,
+			Namespace:   pvc.Namespace,
+			Status:      status,
+			Capacity:    capacity,
+			AccessModes: accessModes,
+			Age:         age,
+		})
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Success: true,
+		Message: fmt.Sprintf("成功获取PVC列表，共 %d 个", len(pvcInfos)),
+		Data:    pvcInfos,
 	})
 }
 
@@ -929,7 +1124,6 @@ func createPVCs(ctx context.Context, clientset *kubernetes.Clientset, req Create
 		size string
 	}{
 		{req.Name + "-workspace", req.Storage.Workspace},
-		{req.Name + "-vscode", req.Storage.VSCode},
 	}
 
 	for _, pvc := range pvcs {
@@ -1538,22 +1732,14 @@ func checkSingleResourceQuota(quota *corev1.ResourceQuota, req CreateEnvironment
 		return fmt.Errorf("无效的工作区存储值: %v", err)
 	}
 
-	vscodeStorage, err := resource.ParseQuantity(req.Storage.VSCode)
-	if err != nil {
-		return fmt.Errorf("无效的VSCode存储值: %v", err)
-	}
-
-	totalStorage := workspaceStorage.DeepCopy()
-	totalStorage.Add(vscodeStorage)
-
 	if hardStorage, exists := quota.Spec.Hard["requests.storage"]; exists {
 		usedStorage := quota.Status.Used["requests.storage"]
 		if usedStorage.Cmp(resource.MustParse("0")) != 0 {
 			remainingStorage := hardStorage.DeepCopy()
 			remainingStorage.Sub(usedStorage)
-			if remainingStorage.Cmp(totalStorage) < 0 {
+			if remainingStorage.Cmp(workspaceStorage) < 0 {
 				return fmt.Errorf("存储资源不足: 需要%s, 剩余可用%s (配额: %s, 已用: %s)",
-					totalStorage.String(),
+					workspaceStorage.String(),
 					remainingStorage.String(),
 					hardStorage.String(),
 					usedStorage.String())
@@ -1611,36 +1797,7 @@ func validatePVCWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmen
 		return fmt.Errorf("工作区PVC创建验证失败: %v", err)
 	}
 
-	// 验证VSCode PVC
-	vscodePVC := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      req.Name + "-vscode",
-			Namespace: req.Namespace,
-			Labels: map[string]string{
-				"app": req.Name,
-				"type": "vscode-storage",
-			},
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
-			},
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(req.Storage.VSCode),
-				},
-			},
-			StorageClassName: func() *string { s := "local"; return &s }(),
-		},
-	}
-
-	_, err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Create(
-		context.Background(), vscodePVC, metav1.CreateOptions{DryRun: []string{"All"}})
-	if err != nil {
-		return fmt.Errorf("VSCode PVC创建验证失败: %v", err)
-	}
-
-	fmt.Printf("✅ PVC资源验证通过 (workspace: %s, vscode: %s)\n", req.Storage.Workspace, req.Storage.VSCode)
+	fmt.Printf("✅ PVC资源验证通过 (workspace: %s)\n", req.Storage.Workspace)
 	return nil
 }
 
@@ -1695,10 +1852,6 @@ func validatePodWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmen
 							Name:      "workspace-storage",
 							MountPath: "/workspace",
 						},
-						{
-							Name:      "vscode-storage",
-							MountPath: "/root/.vscode-server",
-						},
 					},
 				},
 			},
@@ -1708,14 +1861,6 @@ func validatePodWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmen
 					VolumeSource: corev1.VolumeSource{
 						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 							ClaimName: req.Name + "-workspace",
-						},
-					},
-				},
-				{
-					Name: "vscode-storage",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: req.Name + "-vscode",
 						},
 					},
 				},

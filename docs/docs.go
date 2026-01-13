@@ -193,7 +193,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "删除指定名称的环境，包括PVC、Deployment和Service",
+                "description": "删除指定名称的环境，包括Deployment和Service。可通过delete_storage参数控制是否删除PVC",
                 "consumes": [
                     "application/json"
                 ],
@@ -219,6 +219,120 @@ const docTemplate = `{
                         "required": true,
                         "schema": {
                             "$ref": "#/definitions/main.DeleteEnvironmentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/pvcs/list": {
+            "post": {
+                "description": "列出PVC，支持按命名空间和名称前缀过滤",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "pvcs"
+                ],
+                "summary": "列出PVC",
+                "parameters": [
+                    {
+                        "description": "列出PVC请求参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.ListPVCsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/main.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/main.PVCInfo"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/pvcs/{name}": {
+            "delete": {
+                "description": "删除指定环境的PVC（警告：此操作不可逆，数据将永久丢失）",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "pvcs"
+                ],
+                "summary": "删除PVC",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "环境名称",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "删除PVC请求参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/main.DeletePVCRequest"
                         }
                     }
                 ],
@@ -425,8 +539,7 @@ const docTemplate = `{
                 "image",
                 "kubeconfig",
                 "name",
-                "resources",
-                "storage"
+                "resources"
             ],
             "properties": {
                 "image": {
@@ -452,6 +565,10 @@ const docTemplate = `{
                 "nodeports": {
                     "type": "object",
                     "properties": {
+                        "opencode": {
+                            "type": "integer",
+                            "example": 0
+                        },
                         "ssh": {
                             "type": "integer",
                             "example": 0
@@ -495,15 +612,7 @@ const docTemplate = `{
                 },
                 "storage": {
                     "type": "object",
-                    "required": [
-                        "vscode",
-                        "workspace"
-                    ],
                     "properties": {
-                        "vscode": {
-                            "type": "string",
-                            "example": "5Gi"
-                        },
                         "workspace": {
                             "type": "string",
                             "example": "10Gi"
@@ -513,6 +622,27 @@ const docTemplate = `{
             }
         },
         "main.DeleteEnvironmentRequest": {
+            "type": "object",
+            "required": [
+                "kubeconfig",
+                "namespace"
+            ],
+            "properties": {
+                "delete_storage": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "kubeconfig": {
+                    "type": "string",
+                    "example": "apiVersion: v1\nkind: Config\n..."
+                },
+                "namespace": {
+                    "type": "string",
+                    "example": "dev-space"
+                }
+            }
+        },
+        "main.DeletePVCRequest": {
             "type": "object",
             "required": [
                 "kubeconfig",
@@ -633,6 +763,26 @@ const docTemplate = `{
                 }
             }
         },
+        "main.ListPVCsRequest": {
+            "type": "object",
+            "required": [
+                "kubeconfig"
+            ],
+            "properties": {
+                "filter": {
+                    "type": "string",
+                    "example": "demo"
+                },
+                "kubeconfig": {
+                    "type": "string",
+                    "example": "apiVersion: v1\nkind: Config\n..."
+                },
+                "namespace": {
+                    "type": "string",
+                    "example": "dev-space"
+                }
+            }
+        },
         "main.ListServiceAccountsRequest": {
             "type": "object",
             "properties": {
@@ -657,6 +807,32 @@ const docTemplate = `{
                     "type": "integer",
                     "default": 20,
                     "example": 20
+                }
+            }
+        },
+        "main.PVCInfo": {
+            "type": "object",
+            "properties": {
+                "access_modes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "age": {
+                    "type": "string"
+                },
+                "capacity": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
                 }
             }
         }

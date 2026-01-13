@@ -54,7 +54,7 @@ func main() {
 	r.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, tenant-id")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -77,6 +77,10 @@ func main() {
 		v1.POST("/environments/:name", GetEnvironment)
 		v1.DELETE("/environments/:name", DeleteEnvironment)
 		v1.POST("/environments/list", ListEnvironments)
+
+		// PVC管理
+		v1.DELETE("/pvcs/:name", DeletePVC)
+		v1.POST("/pvcs/list", ListPVCs)
 	}
 
 	// Swagger文档

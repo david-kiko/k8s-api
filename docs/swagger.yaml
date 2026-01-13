@@ -30,6 +30,9 @@ definitions:
         type: string
       nodeports:
         properties:
+          opencode:
+            example: 0
+            type: integer
           ssh:
             example: 0
             type: integer
@@ -62,24 +65,35 @@ definitions:
         type: object
       storage:
         properties:
-          vscode:
-            example: 5Gi
-            type: string
           workspace:
             example: 10Gi
             type: string
-        required:
-        - vscode
-        - workspace
         type: object
     required:
     - image
     - kubeconfig
     - name
     - resources
-    - storage
     type: object
   main.DeleteEnvironmentRequest:
+    properties:
+      delete_storage:
+        example: false
+        type: boolean
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      namespace:
+        example: dev-space
+        type: string
+    required:
+    - kubeconfig
+    - namespace
+    type: object
+  main.DeletePVCRequest:
     properties:
       kubeconfig:
         example: |-
@@ -181,6 +195,23 @@ definitions:
     required:
     - kubeconfig
     type: object
+  main.ListPVCsRequest:
+    properties:
+      filter:
+        example: demo
+        type: string
+      kubeconfig:
+        example: |-
+          apiVersion: v1
+          kind: Config
+          ...
+        type: string
+      namespace:
+        example: dev-space
+        type: string
+    required:
+    - kubeconfig
+    type: object
   main.ListServiceAccountsRequest:
     properties:
       kubeconfig:
@@ -204,6 +235,23 @@ definitions:
         description: 每页大小
         example: 20
         type: integer
+    type: object
+  main.PVCInfo:
+    properties:
+      access_modes:
+        items:
+          type: string
+        type: array
+      age:
+        type: string
+      capacity:
+        type: string
+      name:
+        type: string
+      namespace:
+        type: string
+      status:
+        type: string
     type: object
 host: localhost:8080
 info:
@@ -258,7 +306,7 @@ paths:
     delete:
       consumes:
       - application/json
-      description: 删除指定名称的环境，包括PVC、Deployment和Service
+      description: 删除指定名称的环境，包括Deployment和Service。可通过delete_storage参数控制是否删除PVC
       parameters:
       - description: 环境名称
         in: path
@@ -358,6 +406,78 @@ paths:
             $ref: '#/definitions/main.APIResponse'
       tags:
       - environments
+  /pvcs/{name}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定环境的PVC（警告：此操作不可逆，数据将永久丢失）
+      parameters:
+      - description: 环境名称
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: 删除PVC请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.DeletePVCRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 删除PVC
+      tags:
+      - pvcs
+  /pvcs/list:
+    post:
+      consumes:
+      - application/json
+      description: 列出PVC，支持按命名空间和名称前缀过滤
+      parameters:
+      - description: 列出PVC请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/main.ListPVCsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            allOf:
+            - $ref: '#/definitions/main.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/main.PVCInfo'
+                  type: array
+              type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+        "500":
+          description: 服务器内部错误
+          schema:
+            $ref: '#/definitions/main.APIResponse'
+      summary: 列出PVC
+      tags:
+      - pvcs
   /service-accounts/{name}:
     delete:
       consumes:

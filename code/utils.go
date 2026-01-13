@@ -81,8 +81,6 @@ spec:
         volumeMounts:
         - name: workspace-storage
           mountPath: /workspace
-        - name: vscode-storage
-          mountPath: /root/.vscode-server
         livenessProbe:
           tcpSocket:
             port: 7681
@@ -107,16 +105,13 @@ spec:
       volumes:
       - name: workspace-storage
         persistentVolumeClaim:
-          claimName: %s-workspace
-      - name: vscode-storage
-        persistentVolumeClaim:
-          claimName: %s-vscode`
+          claimName: %s-workspace`
 
 	return fmt.Sprintf(template,
 		req.Name, req.Namespace, req.Name, req.Name, req.Name, req.SAName, req.Image, envVars,
 		req.Resources.CPU, req.Resources.Memory,
 		req.Resources.CPULimit, req.Resources.MemoryLimit,
-		req.Name, req.Name)
+		req.Name)
 }
 
 // generateServiceYAML 生成Service的YAML
