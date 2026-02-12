@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -20,25 +19,72 @@ import (
 
 // generateDeploymentYAML 生成Deployment的YAML
 func generateDeploymentYAML(req CreateEnvironmentRequest) string {
-	// 生成基础环境变量部分
-	envVars := `        env:
-        - name: ACCESS_PASSWORD
-          value: "8Dd8dw8k"
-        - name: ROOT_PASSWORD
-          value: "8Dd8dw8k"
-        - name: WORKSPACE_DIR
-          value: "/workspace"`
-
-	// 如果提供了 KMCODEConfig，添加到环境变量中
-	if req.KMCODEConfig != nil {
-		// 将 map 转换为 JSON 字符串
-		if configBytes, err := json.Marshal(req.KMCODEConfig); err == nil {
-			// 转义 JSON 字符串中的特殊字符，特别是单引号
-			configStr := strings.ReplaceAll(string(configBytes), "'", "''")
-			envVars += fmt.Sprintf(`
-        - name: KMCODE_CONFIG
-          value: '%s'`, configStr)
+	// 动态生成环境变量列表
+	envVarsYAML := ""
+	if len(req.Env) > 0 {
+		envVarsYAML = "        env:\n"
+		for _, env := range req.Env {
+			envVarsYAML += fmt.Sprintf("        - name: %s\n          value: \"%s\"\n", env.Name, env.Value)
 		}
+	}
+
+	// 动态生成端口列表
+	portsYAML := ""
+	for _, port := range req.Ports {
+		portsYAML += fmt.Sprintf("        - containerPort: %d  # %s\n", port.ContainerPort, port.Name)
+	}
+
+	// 动态生成存储卷列表
+	volumeMountsYAML := ""
+	volumesYAML := ""
+	for _, storage := range req.Storage {
+		volumeMountsYAML += fmt.Sprintf("        - name: %s\n          mountPath: %s\n", storage.Name+"-storage", storage.Path)
+		volumesYAML += fmt.Sprintf("      - name: %s\n        persistentVolumeClaim:\n          claimName: %s-%s\n", storage.Name+"-storage", req.Name, storage.Name)
+	}
+
+	// 生成健康检查探针
+	probeYAML := ""
+	if req.HealthCheck != nil && req.HealthCheck.Enabled {
+		// 设置默认值
+		initialDelay := req.HealthCheck.InitialDelay
+		periodSeconds := req.HealthCheck.PeriodSeconds
+		if periodSeconds == 0 {
+			periodSeconds = 10
+		}
+		failureThreshold := req.HealthCheck.FailureThreshold
+		if failureThreshold == 0 {
+			failureThreshold = 3
+		}
+
+		// 获取目标端口号
+		targetPort := ""
+		for _, port := range req.Ports {
+			if port.Name == req.HealthCheck.PortName {
+				targetPort = fmt.Sprintf("%d", port.ContainerPort)
+				break
+			}
+		}
+		if targetPort == "" {
+			targetPort = req.HealthCheck.PortName // 可能是端口号
+		}
+
+		probeYAML = fmt.Sprintf(`        livenessProbe:
+          httpGet:
+            path: %s
+            port: %s
+          initialDelaySeconds: %d
+          periodSeconds: %d
+          failureThreshold: %d
+        readinessProbe:
+          httpGet:
+            path: %s
+            port: %s
+          initialDelaySeconds: %d
+          periodSeconds: %d
+          failureThreshold: %d
+`,
+			req.HealthCheck.Path, targetPort, initialDelay, periodSeconds, failureThreshold,
+			req.HealthCheck.Path, targetPort, initialDelay, periodSeconds, failureThreshold)
 	}
 
 	template := `---
@@ -66,10 +112,8 @@ spec:
       - name: dev-environment
         image: %s
         ports:
-        - containerPort: 8080  # VS Code Web Interface
-        - containerPort: 22    # SSH
-        - containerPort: 7681  # Web Terminal
-        - containerPort: 4096  # OpenCode Service
+%s
+%s
 %s
         resources:
           requests:
@@ -79,43 +123,30 @@ spec:
             cpu: "%s"
             memory: "%s"
         volumeMounts:
-        - name: workspace-storage
-          mountPath: /workspace
-        livenessProbe:
-          tcpSocket:
-            port: 7681
-          initialDelaySeconds: 10
-          periodSeconds: 30
-          timeoutSeconds: 3
-          failureThreshold: 5
-        readinessProbe:
-          tcpSocket:
-            port: 7681
-          initialDelaySeconds: 2
-          periodSeconds: 5
-          timeoutSeconds: 1
-          failureThreshold: 5
-        startupProbe:
-          tcpSocket:
-            port: 7681
-          initialDelaySeconds: 1
-          periodSeconds: 1
-          timeoutSeconds: 1
-          failureThreshold: 120
+%s
       volumes:
-      - name: workspace-storage
-        persistentVolumeClaim:
-          claimName: %s-workspace`
+%s`
 
 	return fmt.Sprintf(template,
-		req.Name, req.Namespace, req.Name, req.Name, req.Name, req.SAName, req.Image, envVars,
+		req.Name, req.Namespace, req.Name, req.Name, req.Name, req.SAName, req.Image, portsYAML, envVarsYAML, probeYAML,
 		req.Resources.CPU, req.Resources.Memory,
 		req.Resources.CPULimit, req.Resources.MemoryLimit,
-		req.Name)
+		volumeMountsYAML, volumesYAML)
 }
 
 // generateServiceYAML 生成Service的YAML
 func generateServiceYAML(req CreateEnvironmentRequest) string {
+	// 动态生成端口列表
+	portsYAML := ""
+	for _, port := range req.Ports {
+		portsYAML += fmt.Sprintf(`  - name: %s
+    port: %d
+    targetPort: %d
+    nodePort: %d
+    protocol: %s
+`, port.Name, port.ServicePort, port.ContainerPort, port.NodePort, port.Protocol)
+	}
+
 	template := `---
 apiVersion: v1
 kind: Service
@@ -130,30 +161,10 @@ spec:
   selector:
     app: %s
   ports:
-  - name: vscode-web
-    port: 8080
-    targetPort: 8080
-    nodePort: %d
-    protocol: TCP
-  - name: ssh
-    port: 22
-    targetPort: 22
-    nodePort: %d
-    protocol: TCP
-  - name: web-terminal
-    port: 7681
-    targetPort: 7681
-    nodePort: %d
-    protocol: TCP
-  - name: opencode
-    port: 4096
-    targetPort: 4096
-    nodePort: %d
-    protocol: TCP`
+%s`
 
 	return fmt.Sprintf(template,
-		req.Name, req.Namespace, req.Name, req.Name,
-		req.NodePorts.VSCode, req.NodePorts.SSH, req.NodePorts.Terminal, req.NodePorts.OpenCode)
+		req.Name, req.Namespace, req.Name, req.Name, portsYAML)
 }
 
 // generateSAKubeconfig 为ServiceAccount生成kubeconfig（不创建权限，权限应该已经存在）
@@ -558,31 +569,35 @@ func createResourceQuota(ctx context.Context, clientset *kubernetes.Clientset, n
 		resourceQuota.Spec.Hard[corev1.ResourcePods] = resource.MustParse(limits.PodCount)
 	}
 
-	// 创建ResourceQuota
+	// 尝试创建ResourceQuota
 	_, err := clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, resourceQuota, metav1.CreateOptions{})
-	if err != nil && !isAlreadyExistsError(err) {
-		return fmt.Errorf("创建ResourceQuota失败: %v", err)
+	if err != nil {
+		if isAlreadyExistsError(err) {
+			// ResourceQuota已存在，更新它
+			existing, err := clientset.CoreV1().ResourceQuotas(namespace).Get(ctx, "resource-quota", metav1.GetOptions{})
+			if err != nil {
+				return fmt.Errorf("获取现有ResourceQuota失败: %v", err)
+			}
+
+			// 更新Hard限制
+			existing.Spec.Hard = resourceQuota.Spec.Hard
+
+			// 更新ResourceQuota
+			_, err = clientset.CoreV1().ResourceQuotas(namespace).Update(ctx, existing, metav1.UpdateOptions{})
+			if err != nil {
+				return fmt.Errorf("更新ResourceQuota失败: %v", err)
+			}
+			fmt.Printf("✅ ResourceQuota已更新 (pods: %s, cpu: %s, memory: %s, storage: %s)\n",
+				limits.PodCount, limits.CPU, limits.Memory, limits.Storage)
+		} else {
+			return fmt.Errorf("创建ResourceQuota失败: %v", err)
+		}
+	} else {
+		fmt.Printf("✅ ResourceQuota已创建 (pods: %s, cpu: %s, memory: %s, storage: %s)\n",
+			limits.PodCount, limits.CPU, limits.Memory, limits.Storage)
 	}
 
 	return nil
-}
-
-// setNodePortsDefaults 设置NodePorts的默认值
-func setNodePortsDefaults(req *CreateEnvironmentRequest) {
-	// 如果NodePorts是零值（用户没有传入），设置默认值0
-	// 这与让k8s自动分配端口的行为一致
-	if req.NodePorts.VSCode == 0 {
-		req.NodePorts.VSCode = 0 // 明确设置为0，表示k8s自动分配
-	}
-	if req.NodePorts.SSH == 0 {
-		req.NodePorts.SSH = 0 // 明确设置为0，表示k8s自动分配
-	}
-	if req.NodePorts.Terminal == 0 {
-		req.NodePorts.Terminal = 0 // 明确设置为0，表示k8s自动分配
-	}
-	if req.NodePorts.OpenCode == 0 {
-		req.NodePorts.OpenCode = 0 // 明确设置为0，表示k8s自动分配
-	}
 }
 
 // getAdminKubeconfig 获取挂载的管理员kubeconfig

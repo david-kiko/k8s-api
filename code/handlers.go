@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -21,7 +22,7 @@ import (
 type CreateEnvironmentRequest struct {
 	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
 	Name       string `json:"name" binding:"required" example:"demo"`
-	Namespace  string `json:"namespace" example:"dev-space" note:"可选，默认使用kubeconfig中的namespace"`
+	Namespace  string `json:"namespace" example:"workspace" note:"可选，默认使用kubeconfig中的namespace"`
 	Image      string `json:"image" binding:"required" example:"registry.km.top/kmai/ubuntu:22.04-ide"`
 	// 以下字段由系统从kubeconfig中解析，不需要用户传入
 	SAName     string `json:"-"` // 从kubeconfig中提取的ServiceAccount名称
@@ -31,49 +32,83 @@ type CreateEnvironmentRequest struct {
 		Memory     string `json:"memory" binding:"required" example:"2Gi"`
 		MemoryLimit string `json:"memory_limit" binding:"required" example:"4Gi"`
 	} `json:"resources" binding:"required"`
-	Storage struct {
-		Workspace string `json:"workspace" example:"10Gi" note:"可选，默认1Gi"`
-	} `json:"storage,omitempty"`
-	NodePorts struct {
-		VSCode   int `json:"vscode" example:"0"`
-		SSH      int `json:"ssh" example:"0"`
-		Terminal int `json:"terminal" example:"0"`
-		OpenCode int `json:"opencode" example:"0"`
-	} `json:"nodeports"`
-	KMCODEConfig map[string]interface{} `json:"kmcode_config,omitempty" note:"可选，KMCODE配置，将转换为JSON字符串传入pod"`
+	Storage []StorageConfig `json:"storage,omitempty" note:"持久化存储配置"`
+	Ports   []PortConfig     `json:"ports" binding:"required" note:"容器端口配置"`
+	Env     []EnvVar         `json:"env,omitempty" note:"环境变量配置"`
+	HealthCheck *HealthCheckConfig `json:"health_check,omitempty" note:"健康检查配置"`
+	Ingress *IngressConfig  `json:"ingress,omitempty" note:"Ingress配置"`
+}
+
+// PortConfig 端口配置
+type PortConfig struct {
+	Name          string `json:"name" example:"web" note:"端口名称，用于生成Ingress域名"`
+	ContainerPort int    `json:"container_port" example:"8080" note:"容器端口"`
+	ServicePort   int    `json:"service_port" example:"8080" note:"Service端口"`
+	NodePort      int    `json:"node_port" example:"0" note:"NodePort，0表示自动分配"`
+	Protocol      string `json:"protocol" example:"TCP" note:"协议类型，TCP或UDP"`
+}
+
+// StorageConfig 存储配置
+type StorageConfig struct {
+	Name string `json:"name" example:"workspace" note:"存储名称，用于生成PVC名称"`
+	Path string `json:"path" example:"/workspace" note:"容器内挂载路径"`
+	Size string `json:"size" example:"10Gi" note:"存储大小"`
+}
+
+// EnvVar 环境变量配置
+type EnvVar struct {
+	Name  string `json:"name" note:"环境变量名称"`
+	Value string `json:"value" note:"环境变量值"`
+}
+
+// HealthCheckConfig 健康检查配置
+type HealthCheckConfig struct {
+	Enabled          bool   `json:"enabled" note:"是否启用健康检查"`
+	PortName         string `json:"port_name" note:"检查哪个端口"`
+	Path             string `json:"path" note:"HTTP 探测路径"`
+	InitialDelay     int    `json:"initial_delay" note:"初始延迟（秒），默认0"`
+	PeriodSeconds    int    `json:"period_seconds" note:"检查间隔（秒），默认10"`
+	FailureThreshold int    `json:"failure_threshold" note:"失败阈值，默认3"`
+}
+
+// IngressConfig Ingress配置
+type IngressConfig struct {
+	Enabled bool              `json:"enabled" example:"true" note:"是否启用Ingress"`
+	Rules   []IngressPortRule `json:"rules" note:"Ingress规则列表"`
+}
+
+// IngressPortRule Ingress端口规则
+type IngressPortRule struct {
+	PortName string `json:"port_name" example:"web" note:"对应PortConfig中的Name，最终host格式为{env_name}-{port_name}.{ingress_domain}"`
+	Path     string `json:"path" example:"/" note:"路径，默认/"`
+	PathType string `json:"path_type" example:"Prefix" note:"路径类型，默认Prefix"`
 }
 
 // KubeconfigRequest 创建ServiceAccount请求参数
 type KubeconfigRequest struct {
 	Kubeconfig        string `json:"kubeconfig" example:"apiVersion: v1\nkind: Config\n..." note:"可选，不传入则使用挂载的管理员kubeconfig"`
-	Namespace         string `json:"namespace" example:"default"`
+	Namespace         string `json:"namespace" example:"workspace"`
 	CreateIfNotExists bool   `json:"create_if_not_exists" example:"true"`
 	TokenExpiration   int64  `json:"token_expiration_hours" example:"1" note:"Token过期时间（小时），默认：1小时"`
-	ResourceLimits    struct {
-		CPU       string `json:"cpu" example:"8" note:"CPU限制，默认：8，例如：8、4000m"`
-		Memory    string `json:"memory" example:"16Gi" note:"内存限制，默认：16Gi，例如：16Gi、16000Mi"`
-		Storage   string `json:"storage" example:"20Gi" note:"存储限制，默认：20Gi，例如：20Gi"`
-		PodCount  string `json:"pod_count" example:"2" note:"Pod数量限制，默认：2，例如：2"`
-	} `json:"resource_limits,omitempty" note:"资源限制配置，字段不填时使用默认值"`
 }
 
 // DeleteEnvironmentRequest 删除环境请求参数
 type DeleteEnvironmentRequest struct {
 	Kubeconfig     string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
-	Namespace      string `json:"namespace" binding:"required" example:"dev-space"`
+	Namespace      string `json:"namespace" binding:"required" example:"workspace"`
 	DeleteStorage  bool   `json:"delete_storage" example:"false" note:"是否删除存储，默认false（保留PVC以便下次复用）"`
 }
 
 // DeletePVCRequest 删除PVC请求参数
 type DeletePVCRequest struct {
 	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
-	Namespace  string `json:"namespace" binding:"required" example:"dev-space"`
+	Namespace  string `json:"namespace" binding:"required" example:"workspace"`
 }
 
 // ListPVCsRequest 列出PVC请求参数
 type ListPVCsRequest struct {
 	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
-	Namespace  string `json:"namespace" example:"dev-space" note:"可选，不指定则列所有命名空间"`
+	Namespace  string `json:"namespace" example:"workspace" note:"可选，不指定则列所有命名空间"`
 	Filter     string `json:"filter" example:"demo" note:"可选，按名称前缀过滤"`
 }
 
@@ -90,13 +125,13 @@ type PVCInfo struct {
 // GetEnvironmentRequest 获取环境信息请求参数
 type GetEnvironmentRequest struct {
 	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
-	Namespace  string `json:"namespace" binding:"required" example:"dev-space"`
+	Namespace  string `json:"namespace" binding:"required" example:"workspace"`
 }
 
 // DeleteServiceAccountRequest 删除ServiceAccount请求参数
 type DeleteServiceAccountRequest struct {
 	Kubeconfig string `json:"kubeconfig" example:"apiVersion: v1\nkind: Config\n..." note:"可选，不传入则使用挂载的管理员kubeconfig"`
-	Namespace  string `json:"namespace" binding:"required" example:"dev-space"`
+	Namespace  string `json:"namespace" binding:"required" example:"workspace"`
 }
 
 // APIResponse 通用API响应
@@ -156,6 +191,17 @@ func CreateEnvironment(c *gin.Context) {
 			Message: "请求参数错误: " + err.Error(),
 		})
 		return
+	}
+
+	// 验证端口协议
+	for _, port := range req.Ports {
+		if port.Protocol != "TCP" && port.Protocol != "UDP" {
+			c.JSON(http.StatusBadRequest, APIResponse{
+				Success: false,
+				Message: fmt.Sprintf("端口 '%s' 的协议必须是 TCP 或 UDP", port.Name),
+			})
+			return
+		}
 	}
 
 	// 创建k8s客户端（使用传入的SA kubeconfig）
@@ -245,7 +291,7 @@ func CreateEnvironment(c *gin.Context) {
 	}
 
 	if namespace == "" {
-		namespace = "default"
+		namespace = "workspace"
 		fmt.Printf("🔍 调试信息: namespace为空，设置为默认值='%s'\n", namespace)
 	}
 
@@ -259,13 +305,12 @@ func CreateEnvironment(c *gin.Context) {
 	req.SAName = actualSAName
 	req.Namespace = namespace
 
-	// 设置NodePorts默认值（如果是零值）
-	setNodePortsDefaults(&req)
-
-	// 设置Storage workspace默认值（如果是空值）
-	if req.Storage.Workspace == "" {
-		req.Storage.Workspace = "1Gi"
-		fmt.Printf("🔍 调试信息: storage.workspace为空，设置为默认值='1Gi'\n")
+	// 设置Storage默认值（如果为空）
+	if len(req.Storage) == 0 {
+		req.Storage = []StorageConfig{
+			{Name: "workspace", Path: "/workspace", Size: "1Gi"},
+		}
+		fmt.Printf("🔍 调试信息: storage为空，设置为默认值='[workspace: /workspace, 1Gi]'\n")
 	}
 
 	// 🔍 在创建前进行资源预检查
@@ -313,6 +358,47 @@ func CreateEnvironment(c *gin.Context) {
 		return
 	}
 
+	// 创建Ingress（如果启用）
+	ingressInfo := gin.H{"enabled": false}
+	if req.Ingress != nil && req.Ingress.Enabled {
+		// 验证 Ingress Rules
+		if len(req.Ingress.Rules) == 0 {
+			c.JSON(http.StatusBadRequest, APIResponse{
+				Success: false,
+				Message: "Ingress 启用时 rules 不能为空",
+			})
+			return
+		}
+
+		ingressDomain := os.Getenv("INGRESS_DOMAIN")
+		if ingressDomain == "" {
+			ingressDomain = "kmos.ai"
+		}
+		ingressTLSSecret := os.Getenv("INGRESS_TLS_SECRET")
+		if ingressTLSSecret == "" {
+			ingressTLSSecret = "wildcard-cert"
+		}
+
+		ingressHosts := []string{}
+		for _, rule := range req.Ingress.Rules {
+			host := fmt.Sprintf("%s-%s.%s", req.Name, rule.PortName, ingressDomain)
+			ingressHosts = append(ingressHosts, host)
+
+			err = createIngressForPort(ctx, clientset, req, rule.PortName, rule.Path, rule.PathType, ingressDomain, ingressTLSSecret)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, APIResponse{
+					Success: false,
+					Message: fmt.Sprintf("创建Ingress失败(%s): %v", rule.PortName, err),
+				})
+				return
+			}
+		}
+		ingressInfo = gin.H{
+			"enabled": true,
+			"hosts":   ingressHosts,
+		}
+	}
+
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
 		Message: "开发环境部署成功（支持幂等操作）",
@@ -320,6 +406,7 @@ func CreateEnvironment(c *gin.Context) {
 			"namespace":    req.Namespace,
 			"service_name": fmt.Sprintf("%s-service", req.Name),
 			"sa_name":      req.SAName,
+			"ingress":      ingressInfo,
 		},
 	})
 }
@@ -357,7 +444,7 @@ func CreateServiceAccount(c *gin.Context) {
 
 	// 设置默认namespace
 	if req.Namespace == "" {
-		req.Namespace = "default"
+		req.Namespace = "workspace"
 	}
 
 	// 设置默认Token过期时间（1小时）
@@ -429,21 +516,21 @@ func CreateServiceAccount(c *gin.Context) {
 			}
 		}
 
-		// 创建ResourceQuota资源配额
-		resourceLimits := ResourceLimits{
-			CPU:      req.ResourceLimits.CPU,
-			Memory:   req.ResourceLimits.Memory,
-			Storage:  req.ResourceLimits.Storage,
-			PodCount: req.ResourceLimits.PodCount,
-		}
-		err = createResourceQuota(ctx, clientset, req.Namespace, resourceLimits)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Success: false,
-				Message: "创建ResourceQuota失败: " + err.Error(),
-			})
-			return
-		}
+		// 创建ResourceQuota资源配额 - 暂时注释掉
+		// resourceLimits := ResourceLimits{
+		// 	CPU:      req.ResourceLimits.CPU,
+		// 	Memory:   req.ResourceLimits.Memory,
+		// 	Storage:  req.ResourceLimits.Storage,
+		// 	PodCount: req.ResourceLimits.PodCount,
+		// }
+		// err = createResourceQuota(ctx, clientset, req.Namespace, resourceLimits)
+		// if err != nil {
+		// 	c.JSON(http.StatusInternalServerError, APIResponse{
+		// 		Success: false,
+		// 		Message: "创建ResourceQuota失败: " + err.Error(),
+		// 	})
+		// 	return
+		// }
 	}
 
 	// 创建SA的权限（Role和RoleBinding）
@@ -632,6 +719,15 @@ func DeleteEnvironment(c *gin.Context) {
 		return
 	}
 
+	// 删除Ingress（如果存在）
+	ingressList, _ := clientset.NetworkingV1().Ingresses(req.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", envName),
+	})
+	for _, ingress := range ingressList.Items {
+		_ = clientset.NetworkingV1().Ingresses(req.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+	}
+	// Ingress删除失败不影响整体操作，忽略错误
+
 	// 删除Deployment
 	err = clientset.AppsV1().Deployments(req.Namespace).Delete(ctx, envName, metav1.DeleteOptions{})
 	if err != nil && !isNotFoundError(err) {
@@ -644,15 +740,21 @@ func DeleteEnvironment(c *gin.Context) {
 
 	// 根据参数决定是否删除PVC
 	if req.DeleteStorage {
-		// 删除workspace PVC
-		pvcName := envName + "-workspace"
-		err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Delete(ctx, pvcName, metav1.DeleteOptions{})
-		if err != nil && !isNotFoundError(err) {
-			c.JSON(http.StatusInternalServerError, APIResponse{
-				Success: false,
-				Message: fmt.Sprintf("删除PVC %s 失败: %v", pvcName, err),
-			})
-			return
+		// 删除所有相关的 PVC
+		pvcList, err := clientset.CoreV1().PersistentVolumeClaims(req.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", envName),
+		})
+		if err == nil {
+			for _, pvc := range pvcList.Items {
+				err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{})
+				if err != nil && !isNotFoundError(err) {
+					c.JSON(http.StatusInternalServerError, APIResponse{
+						Success: false,
+						Message: fmt.Sprintf("删除PVC %s 失败: %v", pvc.Name, err),
+					})
+					return
+				}
+			}
 		}
 
 		c.JSON(http.StatusOK, APIResponse{
@@ -710,28 +812,41 @@ func DeletePVC(c *gin.Context) {
 
 	ctx := context.Background()
 
-	// 删除workspace PVC
-	pvcName := envName + "-workspace"
-	err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Delete(ctx, pvcName, metav1.DeleteOptions{})
-	if err != nil && !isNotFoundError(err) {
-		c.JSON(http.StatusInternalServerError, APIResponse{
-			Success: false,
-			Message: fmt.Sprintf("删除PVC %s 失败: %v", pvcName, err),
-		})
-		return
+	// 删除所有相关的 PVC
+	pvcList, err := clientset.CoreV1().PersistentVolumeClaims(req.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", envName),
+	})
+	var deletedPVCs []string
+	if err == nil {
+		for _, pvc := range pvcList.Items {
+			err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{})
+			if err != nil && !isNotFoundError(err) {
+				c.JSON(http.StatusInternalServerError, APIResponse{
+					Success: false,
+					Message: fmt.Sprintf("删除PVC %s 失败: %v", pvc.Name, err),
+				})
+				return
+			}
+			if !isNotFoundError(err) {
+				deletedPVCs = append(deletedPVCs, pvc.Name)
+			}
+		}
 	}
 
-	if isNotFoundError(err) {
+	if len(deletedPVCs) == 0 {
 		c.JSON(http.StatusOK, APIResponse{
 			Success: true,
-			Message: fmt.Sprintf("PVC %s 不存在，无需删除", pvcName),
+			Message: "没有找到需要删除的 PVC",
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, APIResponse{
 		Success: true,
-		Message: "PVC删除成功",
+		Message: fmt.Sprintf("PVC删除成功，共删除 %d 个", len(deletedPVCs)),
+		Data: map[string]interface{}{
+			"deleted_pvcs": deletedPVCs,
+		},
 	})
 }
 
@@ -916,55 +1031,77 @@ func GetEnvironment(c *gin.Context) {
 		}
 	} else {
 		serviceInfo := map[string]interface{}{
-			"exists":    true,
-			"type":      service.Spec.Type,
-			"clusterIP": service.Spec.ClusterIP,
+			"exists":     true,
+			"type":       string(service.Spec.Type),
+			"clusterIp":  service.Spec.ClusterIP,
 		}
 
-		// 如果是NodePort类型，提取NodePort端口信息
-		if service.Spec.Type == corev1.ServiceTypeNodePort {
-			nodePorts := make(map[string]int)
-			for _, port := range service.Spec.Ports {
-				if port.NodePort != 0 {
-					nodePorts[port.Name] = int(port.NodePort)
-				}
-			}
-			serviceInfo["nodePorts"] = nodePorts
+		// 添加 node_ip
+		nodeIP := os.Getenv("NODE_IP")
+		if nodeIP != "" {
+			serviceInfo["nodeIp"] = nodeIP
 		}
+
+		// 提取端口信息
+		portsInfo := []map[string]interface{}{}
+		for _, port := range service.Spec.Ports {
+			portInfo := map[string]interface{}{
+				"name":     port.Name,
+				"port":     port.Port,
+				"protocol": string(port.Protocol),
+			}
+			if port.NodePort != 0 {
+				portInfo["nodePort"] = int(port.NodePort)
+			}
+			portsInfo = append(portsInfo, portInfo)
+		}
+		serviceInfo["ports"] = portsInfo
 
 		envStatus["service"] = serviceInfo
 	}
 
-	// 检查PVC状态
-	pvcs := []string{envName + "-workspace", envName + "-vscode"}
-	pvcStatus := make(map[string]interface{})
-	for _, pvcName := range pvcs {
-		pvc, err := clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Get(ctx, pvcName, metav1.GetOptions{})
-		if err != nil {
-			isNormal, errorType := analyzeError(err)
-			if !isNormal {
-				if errorType == "permission" {
-					permissionErrors = append(permissionErrors, fmt.Sprintf("PVC '%s' 访问权限不足: %v", pvcName, err))
-				} else {
-					criticalErrors = append(criticalErrors, fmt.Sprintf("PVC '%s' 访问失败(%s): %v", pvcName, errorType, err))
+	// 检查Ingress状态（列出所有相关的Ingress）
+	ingressList, err := clientset.NetworkingV1().Ingresses(req.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app=%s", envName),
+	})
+	ingresses := []map[string]interface{}{}
+	if err == nil {
+		for _, ingress := range ingressList.Items {
+			ingressInfo := map[string]interface{}{
+				"name": ingress.Name,
+			}
+			// 提取域名信息
+			if len(ingress.Spec.Rules) > 0 {
+				hosts := []string{}
+				paths := []string{}
+				for _, rule := range ingress.Spec.Rules {
+					if rule.Host != "" {
+						hosts = append(hosts, rule.Host)
+					}
+					for _, path := range rule.HTTP.Paths {
+						paths = append(paths, fmt.Sprintf("%s%s", rule.Host, path.Path))
+					}
 				}
+				ingressInfo["hosts"] = hosts
+				ingressInfo["urls"] = paths
 			}
-			pvcStatus[pvcName] = map[string]interface{}{
-				"exists":    false,
-				"error":     err.Error(),
-				"errorType": errorType,
+			// 提取TLS信息
+			if len(ingress.Spec.TLS) > 0 {
+				tlsInfo := []map[string]string{}
+				for _, tls := range ingress.Spec.TLS {
+					tlsInfo = append(tlsInfo, map[string]string{
+						"hosts":       strings.Join(tls.Hosts, ","),
+						"secret_name": tls.SecretName,
+					})
+				}
+				ingressInfo["tls"] = tlsInfo
 			}
-		} else {
-			pvcStatus[pvcName] = map[string]interface{}{
-				"exists":  true,
-				"status":  string(pvc.Status.Phase),
-				"storage": pvc.Spec.Resources.Requests.Storage().String(),
-			}
+			ingresses = append(ingresses, ingressInfo)
 		}
 	}
-	envStatus["pvcs"] = pvcStatus
+	envStatus["ingresses"] = ingresses
 
-	// 添加整体环境状态
+	// 统一计算环境状态
 	deploymentReady := false
 	serviceExists := false
 	if deployment, ok := envStatus["deployment"].(map[string]interface{}); ok {
@@ -978,107 +1115,22 @@ func GetEnvironment(c *gin.Context) {
 		}
 	}
 
-	// 计算整体状态
-	var overallStatus string
+	// 计算状态
+	var status string
 	switch {
 	case !deploymentReady && !serviceExists:
-		overallStatus = "Creating"
+		status = "Creating"
 	case deploymentReady && serviceExists:
-		overallStatus = "Running"
+		status = "Running"
 	case deploymentReady && !serviceExists:
-		overallStatus = "Partial"
+		status = "Partial"
 	default:
-		overallStatus = "Pending"
+		status = "Pending"
 	}
 
-	envStatus["overall_status"] = overallStatus
-	envStatus["environment_name"] = envName
+	envStatus["environmentName"] = envName
 	envStatus["namespace"] = req.Namespace
-
-	// 添加访问信息
-	accessInfo := make(map[string]interface{})
-	passwordInfo := make(map[string]string)
-
-	if service, ok := envStatus["service"].(map[string]interface{}); ok && service["exists"].(bool) {
-		if nodePorts, ok := service["nodePorts"].(map[string]int); ok {
-			// 从环境变量获取 node-ip
-			nodeIP := os.Getenv("NODE_IP")
-			if nodeIP == "" {
-				nodeIP = "<node-ip>"
-			}
-
-			// 尝试从 Pod 环境变量获取密码
-			podList, err := clientset.CoreV1().Pods(req.Namespace).List(ctx, metav1.ListOptions{
-				LabelSelector: fmt.Sprintf("app=%s", envName),
-			})
-
-			if err == nil && len(podList.Items) > 0 {
-				pod := podList.Items[0] // 获取第一个 Pod
-				for _, env := range pod.Spec.Containers[0].Env {
-					switch env.Name {
-					case "ACCESS_PASSWORD":
-						passwordInfo["vscode"] = env.Value
-					case "ROOT_PASSWORD":
-						passwordInfo["ssh"] = env.Value
-					case "TTYD_PASSWORD":
-						passwordInfo["terminal"] = env.Value
-					}
-				}
-			}
-
-			accessURLs := make(map[string]interface{})
-			for portName, nodePort := range nodePorts {
-				switch portName {
-				case "vscode-web":
-					vscodeInfo := map[string]interface{}{
-						"url": fmt.Sprintf("http://%s:%d", nodeIP, nodePort),
-					}
-					if password, ok := passwordInfo["vscode"]; ok {
-						vscodeInfo["password"] = password
-					}
-					accessURLs["vscode"] = vscodeInfo
-				case "ssh":
-					sshInfo := map[string]interface{}{
-						"ip":       nodeIP,
-						"port":     nodePort,
-						"user":     "root",
-						"protocol": "ssh",
-					}
-					if password, ok := passwordInfo["ssh"]; ok {
-						sshInfo["password"] = password
-					}
-					accessURLs["ssh"] = sshInfo
-				case "web-terminal":
-					terminalInfo := map[string]interface{}{
-						"url": fmt.Sprintf("http://%s:%d", nodeIP, nodePort),
-					}
-					if password, ok := passwordInfo["terminal"]; ok {
-						terminalInfo["password"] = password // 使用专门的 TTYD_PASSWORD
-					}
-					// 如果没有 TTYD_PASSWORD，就不设置 password 字段，表示无密码
-					accessURLs["terminal"] = terminalInfo
-				case "opencode":
-					opencodeInfo := map[string]interface{}{
-						"url": fmt.Sprintf("http://%s:%d", nodeIP, nodePort),
-					}
-					accessURLs["opencode"] = opencodeInfo
-				}
-			}
-			accessInfo["services"] = accessURLs
-			if nodeIP == "<node-ip>" {
-				accessInfo["note"] = "请设置 NODE_IP 环境变量或手动替换 <node-ip> 为实际的服务器IP地址"
-			} else {
-				accessInfo["note"] = fmt.Sprintf("使用服务器IP: %s", nodeIP)
-			}
-
-			// 添加默认密码提示（如果没有从Pod获取到）
-			if len(passwordInfo) == 0 {
-				accessInfo["default_password"] = "8Dd8dw8k"
-				accessInfo["password_note"] = "无法从Pod获取密码信息，使用默认密码"
-			}
-		}
-	}
-	envStatus["access"] = accessInfo
+	envStatus["status"] = status
 
 	// 分析错误情况
 	allErrors := append(criticalErrors, permissionErrors...)
@@ -1119,20 +1171,16 @@ func GetEnvironment(c *gin.Context) {
 
 
 func createPVCs(ctx context.Context, clientset *kubernetes.Clientset, req CreateEnvironmentRequest) error {
-	pvcs := []struct {
-		name string
-		size string
-	}{
-		{req.Name + "-workspace", req.Storage.Workspace},
-	}
+	for _, storage := range req.Storage {
+		pvcName := fmt.Sprintf("%s-%s", req.Name, storage.Name)
 
-	for _, pvc := range pvcs {
 		pvcObj := &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      pvc.name,
+				Name:      pvcName,
 				Namespace: req.Namespace,
 				Labels: map[string]string{
-					"app": req.Name,
+					"app":  req.Name,
+					"type": "storage",
 				},
 			},
 			Spec: corev1.PersistentVolumeClaimSpec{
@@ -1141,7 +1189,7 @@ func createPVCs(ctx context.Context, clientset *kubernetes.Clientset, req Create
 				},
 				Resources: corev1.ResourceRequirements{
 					Requests: corev1.ResourceList{
-						corev1.ResourceStorage: resource.MustParse(pvc.size),
+						corev1.ResourceStorage: resource.MustParse(storage.Size),
 					},
 				},
 				StorageClassName: func() *string { s := "local"; return &s }(),
@@ -1153,7 +1201,7 @@ func createPVCs(ctx context.Context, clientset *kubernetes.Clientset, req Create
 		if err != nil {
 			if isAlreadyExistsError(err) {
 				// 获取现有PVC
-				existing, err := clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Get(ctx, pvc.name, metav1.GetOptions{})
+				existing, err := clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Get(ctx, pvcName, metav1.GetOptions{})
 				if err != nil {
 					return fmt.Errorf("获取现有PVC失败: %v", err)
 				}
@@ -1163,19 +1211,16 @@ func createPVCs(ctx context.Context, clientset *kubernetes.Clientset, req Create
 				newStorage := pvcObj.Spec.Resources.Requests.Storage()
 
 				if existingStorage.Cmp(*newStorage) < 0 {
-					// 新的存储更大，需要更新
-					fmt.Printf("⚠️  PVC %s 存储从 %s 扩展到 %s\n", pvc.name, existingStorage.String(), newStorage.String())
-					// 注意：K8s不支持缩小PVC存储，只能扩展
-					// 这里我们保持原有逻辑，不更新PVC，因为存储扩展比较复杂
-					fmt.Printf("ℹ️  PVC %s 保持现有存储大小 %s\n", pvc.name, existingStorage.String())
+					fmt.Printf("⚠️  PVC %s 存储从 %s 扩展到 %s\n", pvcName, existingStorage.String(), newStorage.String())
+					fmt.Printf("ℹ️  PVC %s 保持现有存储大小 %s\n", pvcName, existingStorage.String())
 				} else {
-					fmt.Printf("✅ PVC %s 已存在，存储大小合适\n", pvc.name)
+					fmt.Printf("✅ PVC %s 已存在，存储大小合适\n", pvcName)
 				}
 			} else {
 				return fmt.Errorf("创建PVC失败: %v", err)
 			}
 		} else {
-			fmt.Printf("✅ PVC %s 已创建\n", pvc.name)
+			fmt.Printf("✅ PVC %s 已创建 (大小: %s, 路径: %s)\n", pvcName, storage.Size, storage.Path)
 		}
 	}
 	return nil
@@ -1256,12 +1301,102 @@ func createService(ctx context.Context, clientset *kubernetes.Clientset, req Cre
 	return nil
 }
 
+func createIngressForPort(ctx context.Context, clientset *kubernetes.Clientset, req CreateEnvironmentRequest, portName, path, pathType, ingressDomain, ingressTLSSecret string) error {
+	ingressName := fmt.Sprintf("%s-%s-ingress", req.Name, portName)
+	host := fmt.Sprintf("%s-%s.%s", req.Name, portName, ingressDomain)
+
+	// 获取目标端口号
+	targetPort := ""
+	for _, port := range req.Ports {
+		if port.Name == portName {
+			targetPort = fmt.Sprintf("%d", port.ServicePort)
+			break
+		}
+	}
+	if targetPort == "" {
+		return fmt.Errorf("找不到端口配置: %s", portName)
+	}
+
+	template := `---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    app: %s
+    type: dev-env
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/client-body-buffer-size: 64k
+    nginx.ingress.kubernetes.io/proxy-body-size: 32m
+    nginx.ingress.kubernetes.io/proxy-buffer-size: 64k
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      client_header_buffer_size 64k;
+      large_client_header_buffers 4 128k;
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  tls:
+  - hosts:
+    - %s
+    secretName: %s
+  rules:
+  - host: %s
+    http:
+      paths:
+      - path: %s
+        pathType: %s
+        backend:
+          service:
+            name: %s-service
+            port:
+              number: %s`
+
+	ingressYAML := fmt.Sprintf(template, ingressName, req.Namespace, req.Name, host, ingressTLSSecret, host, path, pathType, req.Name, targetPort)
+
+	ingressObj := &networkingv1.Ingress{}
+	err := sigsyaml.Unmarshal([]byte(ingressYAML), ingressObj)
+	if err != nil {
+		return fmt.Errorf("解析ingress失败: %v", err)
+	}
+
+	// 尝试创建，如果已存在则更新
+	_, err = clientset.NetworkingV1().Ingresses(req.Namespace).Create(ctx, ingressObj, metav1.CreateOptions{})
+	if err != nil {
+		if isAlreadyExistsError(err) {
+			// 获取现有资源
+			existing, err := clientset.NetworkingV1().Ingresses(req.Namespace).Get(ctx, ingressObj.Name, metav1.GetOptions{})
+			if err != nil {
+				return fmt.Errorf("获取现有ingress失败: %v", err)
+			}
+
+			// 保留资源版本
+			ingressObj.ResourceVersion = existing.ResourceVersion
+
+			// 更新资源
+			_, err = clientset.NetworkingV1().Ingresses(req.Namespace).Update(ctx, ingressObj, metav1.UpdateOptions{})
+			if err != nil {
+				return fmt.Errorf("更新ingress失败: %v", err)
+			}
+			fmt.Printf("✅ Ingress %s 已更新 (域名: %s)\n", ingressObj.Name, host)
+		} else {
+			return fmt.Errorf("创建ingress失败: %v", err)
+		}
+	} else {
+		fmt.Printf("✅ Ingress %s 已创建 (域名: %s)\n", ingressObj.Name, host)
+	}
+	return nil
+}
+
 // ==================== 简化版List接口实现 ====================
 
 // ListEnvironmentsRequest 列出环境请求（简化版）
 type ListEnvironmentsRequest struct {
 	Kubeconfig string `json:"kubeconfig" binding:"required" example:"apiVersion: v1\nkind: Config\n..."`
-	Namespace  string `json:"namespace,omitempty" example:"dev-space"`           // 可选，不指定则用kubeconfig中的
+	Namespace  string `json:"namespace,omitempty" example:"workspace"`           // 可选，不指定则用kubeconfig中的
 	Page       int    `json:"page,omitempty" example:"1" default:"1"`            // 页码，从1开始
 	PageSize   int    `json:"page_size,omitempty" example:"20" default:"20"`     // 每页大小
 }
@@ -1269,7 +1404,7 @@ type ListEnvironmentsRequest struct {
 // ListServiceAccountsRequest 列出ServiceAccount请求（简化版）
 type ListServiceAccountsRequest struct {
 	Kubeconfig string `json:"kubeconfig,omitempty" example:"apiVersion: v1\nkind: Config\n..."` // 可选，不提供则用管理员kubeconfig
-	Namespace  string `json:"namespace,omitempty" example:"dev-space"`                         // 可选，不指定则列所有命名空间
+	Namespace  string `json:"namespace,omitempty" example:"workspace"`                         // 可选，不指定则列所有命名空间
 	Page       int    `json:"page,omitempty" example:"1" default:"1"`                          // 页码，从1开始
 	PageSize   int    `json:"page_size,omitempty" example:"20" default:"20"`                   // 每页大小
 }
@@ -1338,7 +1473,7 @@ func ListEnvironments(c *gin.Context) {
 	if namespace == "" {
 		namespace = currentContext.Namespace
 		if namespace == "" {
-			namespace = "default"
+			namespace = "workspace"
 		}
 	}
 
@@ -1726,25 +1861,41 @@ func checkSingleResourceQuota(quota *corev1.ResourceQuota, req CreateEnvironment
 		}
 	}
 
-	// 检查存储资源
-	workspaceStorage, err := resource.ParseQuantity(req.Storage.Workspace)
-	if err != nil {
-		return fmt.Errorf("无效的工作区存储值: %v", err)
+	// 检查存储资源（汇总所有存储需求）
+	var totalStorage resource.Quantity
+	for i, storage := range req.Storage {
+		storageSize, err := resource.ParseQuantity(storage.Size)
+		if err != nil {
+			return fmt.Errorf("无效的存储值(%s): %v", storage.Name, err)
+		}
+		if i == 0 {
+			totalStorage = storageSize
+		} else {
+			totalStorage.Add(storageSize)
+		}
 	}
 
 	if hardStorage, exists := quota.Spec.Hard["requests.storage"]; exists {
 		usedStorage := quota.Status.Used["requests.storage"]
+		remainingStorage := hardStorage.DeepCopy()
 		if usedStorage.Cmp(resource.MustParse("0")) != 0 {
-			remainingStorage := hardStorage.DeepCopy()
 			remainingStorage.Sub(usedStorage)
-			if remainingStorage.Cmp(workspaceStorage) < 0 {
+		}
+		if remainingStorage.Cmp(totalStorage) < 0 {
+			if usedStorage.Cmp(resource.MustParse("0")) != 0 {
 				return fmt.Errorf("存储资源不足: 需要%s, 剩余可用%s (配额: %s, 已用: %s)",
-					workspaceStorage.String(),
+					totalStorage.String(),
 					remainingStorage.String(),
 					hardStorage.String(),
 					usedStorage.String())
 			}
+			return fmt.Errorf("存储资源不足: 需要%s, 可用%s (配额: %s)",
+				totalStorage.String(),
+				remainingStorage.String(),
+				hardStorage.String())
 		}
+		fmt.Printf("✅ 存储配额验证通过: 需要%s, 配额: %s, 已用: %s, 剩余: %s\n",
+			totalStorage.String(), hardStorage.String(), usedStorage.String(), remainingStorage.String())
 	}
 
 	// 检查Pod数量
@@ -1768,41 +1919,131 @@ func checkSingleResourceQuota(quota *corev1.ResourceQuota, req CreateEnvironment
 
 // validatePVCWithDryRun 使用DryRun验证PVC创建
 func validatePVCWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmentRequest) error {
-	// 验证工作区PVC
-	workspacePVC := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      req.Name + "-workspace",
-			Namespace: req.Namespace,
-			Labels: map[string]string{
-				"app": req.Name,
-				"type": "workspace-storage",
-			},
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
-			},
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(req.Storage.Workspace),
+	for _, storage := range req.Storage {
+		pvcName := fmt.Sprintf("%s-%s", req.Name, storage.Name)
+
+		// 1. 先检查PVC是否已存在
+		existingPVC, err := clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Get(
+			context.Background(), pvcName, metav1.GetOptions{})
+
+		if err == nil {
+			// PVC已存在，验证其规格是否满足要求
+			if err := validateExistingPVC(existingPVC, storage); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if !isNotFoundError(err) {
+			return fmt.Errorf("获取PVC失败: %v", err)
+		}
+
+		// 2. PVC不存在，使用DryRun验证创建
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pvcName,
+				Namespace: req.Namespace,
+				Labels: map[string]string{
+					"app":  req.Name,
+					"type": "storage",
 				},
 			},
-			StorageClassName: func() *string { s := "local"; return &s }(),
-		},
-	}
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{
+					corev1.ReadWriteOnce,
+				},
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: resource.MustParse(storage.Size),
+					},
+				},
+				StorageClassName: func() *string { s := "local"; return &s }(),
+			},
+		}
 
-	_, err := clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Create(
-		context.Background(), workspacePVC, metav1.CreateOptions{DryRun: []string{"All"}})
+		_, err = clientset.CoreV1().PersistentVolumeClaims(req.Namespace).Create(
+			context.Background(), pvc, metav1.CreateOptions{DryRun: []string{"All"}})
+		if err != nil {
+			return fmt.Errorf("PVC创建验证失败(%s): %v", pvcName, err)
+		}
+
+		fmt.Printf("✅ PVC资源验证通过 (%s: %s, 路径: %s)\n", pvcName, storage.Size, storage.Path)
+	}
+	return nil
+}
+
+// validateExistingPVC 验证现有PVC是否满足要求
+func validateExistingPVC(existingPVC *corev1.PersistentVolumeClaim, storage StorageConfig) error {
+	// 1. 验证存储大小
+	existingStorage := existingPVC.Spec.Resources.Requests.Storage()
+	requestedStorage, err := resource.ParseQuantity(storage.Size)
 	if err != nil {
-		return fmt.Errorf("工作区PVC创建验证失败: %v", err)
+		return fmt.Errorf("解析请求的存储大小失败: %v", err)
 	}
 
-	fmt.Printf("✅ PVC资源验证通过 (workspace: %s)\n", req.Storage.Workspace)
+	// 现有存储必须大于等于请求的存储
+	if existingStorage.Cmp(requestedStorage) < 0 {
+		return fmt.Errorf("PVC已存在但存储大小不足: 现有 %s, 需要 %s",
+			existingStorage.String(), requestedStorage.String())
+	}
+
+	// 2. 验证访问模式
+	if len(existingPVC.Spec.AccessModes) == 0 {
+		return fmt.Errorf("PVC没有配置访问模式")
+	}
+	hasReadWriteOnce := false
+	for _, mode := range existingPVC.Spec.AccessModes {
+		if mode == corev1.ReadWriteOnce {
+			hasReadWriteOnce = true
+			break
+		}
+	}
+	if !hasReadWriteOnce {
+		return fmt.Errorf("PVC不支持ReadWriteOnce访问模式")
+	}
+
+	// 3. 验证状态（必须是Bound状态）
+	if existingPVC.Status.Phase != corev1.ClaimBound {
+		return fmt.Errorf("PVC状态异常: %s", existingPVC.Status.Phase)
+	}
+
+	fmt.Printf("✅ PVC已存在且满足要求 (存储: %s)\n", existingStorage.String())
 	return nil
 }
 
 // validatePodWithDryRun 使用DryRun验证Pod资源
 func validatePodWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmentRequest) error {
+	// 动态生成端口列表
+	ports := []corev1.ContainerPort{}
+	for _, port := range req.Ports {
+		protocol := corev1.ProtocolTCP
+		if port.Protocol == "UDP" {
+			protocol = corev1.ProtocolUDP
+		}
+		ports = append(ports, corev1.ContainerPort{
+			ContainerPort: int32(port.ContainerPort),
+			Protocol:      protocol,
+		})
+	}
+
+	// 动态生成存储卷列表
+	volumeMounts := []corev1.VolumeMount{}
+	volumes := []corev1.Volume{}
+	for _, storage := range req.Storage {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      storage.Name + "-storage",
+			MountPath: storage.Path,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: storage.Name + "-storage",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: fmt.Sprintf("%s-%s", req.Name, storage.Name),
+				},
+			},
+		})
+	}
+
 	// 创建一个临时的Pod用于验证
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1819,24 +2060,7 @@ func validatePodWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmen
 				{
 					Name:  req.Name,
 					Image: req.Image,
-					Ports: []corev1.ContainerPort{
-						{
-							ContainerPort: 8080,
-							Protocol:      corev1.ProtocolTCP,
-						},
-						{
-							ContainerPort: 22,
-							Protocol:      corev1.ProtocolTCP,
-						},
-						{
-							ContainerPort: 7681,
-							Protocol:      corev1.ProtocolTCP,
-						},
-						{
-							ContainerPort: 4096,
-							Protocol:      corev1.ProtocolTCP,
-						},
-					},
+					Ports: ports,
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse(req.Resources.CPU),
@@ -1847,24 +2071,10 @@ func validatePodWithDryRun(clientset *kubernetes.Clientset, req CreateEnvironmen
 							corev1.ResourceMemory: resource.MustParse(req.Resources.MemoryLimit),
 						},
 					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "workspace-storage",
-							MountPath: "/workspace",
-						},
-					},
+					VolumeMounts: volumeMounts,
 				},
 			},
-			Volumes: []corev1.Volume{
-				{
-					Name: "workspace-storage",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: req.Name + "-workspace",
-						},
-					},
-				},
-			},
+			Volumes: volumes,
 		},
 	}
 
