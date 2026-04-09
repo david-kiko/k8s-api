@@ -5,7 +5,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: k8s-resource-api:3.0
+    image: registry.cn-hangzhou.aliyuncs.com/public-topeak/k8s-resource-api:3.0
     container_name: k8s-resource-api
     restart: unless-stopped
     ports:

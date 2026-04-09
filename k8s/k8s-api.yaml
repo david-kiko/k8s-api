@@ -1,0 +1,221 @@
+# K8s Resource API - Kubernetes Manifests
+# 支持三种认证方式：用户传入kubeconfig > InCluster > 挂载文件
+
+---
+# ServiceAccount for k8s-api
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-api
+  namespace: workspace
+  labels:
+    app: k8s-api
+
+---
+# ClusterRole with admin privileges (for managing resources across namespaces)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-api-admin
+  labels:
+    app: k8s-api
+rules:
+# Core resources
+- apiGroups: [""]
+  resources: ["*"]
+  verbs: ["*"]
+# ServiceAccount token subresource (for CreateToken API)
+- apiGroups: [""]
+  resources: ["serviceaccounts/token"]
+  verbs: ["create"]
+# Apps resources
+- apiGroups: ["apps"]
+  resources: ["*"]
+  verbs: ["*"]
+# Networking resources
+- apiGroups: ["networking.k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+# RBAC resources (for managing ServiceAccounts and Roles)
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+# Storage resources
+- apiGroups: ["storage.k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+# Authentication resources (for TokenRequest)
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-api-admin
+  labels:
+    app: k8s-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: k8s-api-admin
+subjects:
+- kind: ServiceAccount
+  name: k8s-api
+  namespace: workspace
+
+---
+# ConfigMap for application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-api-config
+  namespace: workspace
+  labels:
+    app: k8s-api
+data:
+  PORT: "8080"
+  GIN_MODE: "release"
+  NODE_IP: "223.76.108.98"
+  INGRESS_DOMAIN: "kmos.ai"
+  INGRESS_TLS_SECRET: "wildcard-cert"
+  SWAGGER_HOST: "k8s-api.kmos.ai"
+
+---
+# PersistentVolumeClaim for logs (optional)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: k8s-api-logs
+  namespace: workspace
+  labels:
+    app: k8s-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local
+
+---
+# Deployment for K8s Resource API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-api
+  namespace: workspace
+  labels:
+    app: k8s-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-api
+  template:
+    metadata:
+      labels:
+        app: k8s-api
+    spec:
+      serviceAccountName: k8s-api
+      containers:
+      - name: k8s-api
+        image: registry.cn-hangzhou.aliyuncs.com/public-topeak/k8s-resource-api:3.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: k8s-api-config
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        # 可选：挂载kubeconfig文件（用于本地测试或降级场景）
+        # 在InCluster模式下不需要挂载，会自动使用ServiceAccount token
+        # - name: admin-kubeconfig
+        #   mountPath: /app/config
+        #   readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 40
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: logs
+        persistentVolumeClaim:
+          claimName: k8s-api-logs
+      # 可选：kubeconfig文件卷（用于本地测试）
+      # - name: admin-kubeconfig
+      #   secret:
+      #     secretName: k8s-api-kubeconfig
+      #     optional: true
+
+---
+# Service for K8s Resource API
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s-api
+  namespace: workspace
+  labels:
+    app: k8s-api
+spec:
+  type: ClusterIP
+  selector:
+    app: k8s-api
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+
+---
+# Ingress for external access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: k8s-api
+  namespace: workspace
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - k8s-api.kmos.ai
+    secretName: wildcard-cert
+  rules:
+  - host: k8s-api.kmos.ai
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: k8s-api
+            port:
+              number: 8080

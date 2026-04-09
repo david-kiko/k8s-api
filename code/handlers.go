@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	sigsyaml "sigs.k8s.io/yaml"
 )
@@ -142,22 +143,54 @@ type APIResponse struct {
 }
 
 // 从kubeconfig内容创建k8s客户端
+// 支持三种方式（按优先级）：
+// 1. 用户传入的kubeconfig内容
+// 2. InCluster配置（Pod内部运行时）
+// 3. 挂载的kubeconfig文件（本地开发/降级）
 func createK8sClientFromKubeconfig(kubeconfigContent string) (*kubernetes.Clientset, error) {
-	fmt.Printf("🔍 调试信息: createK8sClientFromKubeconfig - 开始解析kubeconfig")
+	var restConfig *rest.Config
+	var err error
 
-	// 解析kubeconfig内容
-	config, err := clientcmd.Load([]byte(kubeconfigContent))
-	if err != nil {
-		fmt.Printf("🔍 调试信息: kubeconfig解析失败: %v\n", err)
-		return nil, fmt.Errorf("解析kubeconfig失败: %v", err)
-	}
-	fmt.Printf("🔍 调试信息: kubeconfig解析成功\n")
+	// 优先级1: 使用用户传入的kubeconfig
+	if kubeconfigContent != "" {
+		fmt.Printf("🔍 调试信息: 使用用户传入的kubeconfig\n")
+		config, err := clientcmd.Load([]byte(kubeconfigContent))
+		if err != nil {
+			fmt.Printf("🔍 调试信息: kubeconfig解析失败: %v\n", err)
+			return nil, fmt.Errorf("解析kubeconfig失败: %v", err)
+		}
+		fmt.Printf("🔍 调试信息: kubeconfig解析成功\n")
 
-	// 创建REST配置
-	restConfig, err := clientcmd.NewDefaultClientConfig(*config, &clientcmd.ConfigOverrides{}).ClientConfig()
-	if err != nil {
-		fmt.Printf("🔍 调试信息: REST配置创建失败: %v\n", err)
-		return nil, fmt.Errorf("创建REST配置失败: %v", err)
+		restConfig, err = clientcmd.NewDefaultClientConfig(*config, &clientcmd.ConfigOverrides{}).ClientConfig()
+		if err != nil {
+			fmt.Printf("🔍 调试信息: REST配置创建失败: %v\n", err)
+			return nil, fmt.Errorf("创建REST配置失败: %v", err)
+		}
+	} else {
+		// 优先级2: 尝试InCluster配置
+		restConfig, err = rest.InClusterConfig()
+		if err == nil {
+			fmt.Printf("🔍 调试信息: 使用InCluster配置\n")
+		} else {
+			// 优先级3: 降级到挂载的kubeconfig文件
+			fmt.Printf("🔍 调试信息: InCluster配置不可用 (%v)，尝试挂载的kubeconfig文件\n", err)
+			adminKubeconfigPath := "/app/config/admin-kubeconfig"
+			content, err := os.ReadFile(adminKubeconfigPath)
+			if err != nil {
+				return nil, fmt.Errorf("无法获取kubeconfig: InCluster不可用且文件挂载失败 (%v)", err)
+			}
+
+			config, err := clientcmd.Load(content)
+			if err != nil {
+				return nil, fmt.Errorf("解析挂载的kubeconfig失败: %v", err)
+			}
+
+			restConfig, err = clientcmd.NewDefaultClientConfig(*config, &clientcmd.ConfigOverrides{}).ClientConfig()
+			if err != nil {
+				return nil, fmt.Errorf("从挂载文件创建REST配置失败: %v", err)
+			}
+			fmt.Printf("🔍 调试信息: 使用挂载的kubeconfig文件\n")
+		}
 	}
 
 	// 创建clientset

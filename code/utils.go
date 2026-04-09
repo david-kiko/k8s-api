@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
 )
@@ -111,6 +112,7 @@ spec:
       containers:
       - name: dev-environment
         image: %s
+        imagePullPolicy: IfNotPresent
         ports:
 %s
 %s
@@ -618,18 +620,81 @@ func getAdminKubeconfig() (string, error) {
 	return string(content), nil
 }
 
-// resolveKubeconfig 解析kubeconfig，优先使用用户传入的，否则使用管理员kubeconfig
+// buildKubeconfigFromInCluster 从InCluster配置构建kubeconfig内容
+// 用于在Pod内部运行时生成SA kubeconfig
+func buildKubeconfigFromInCluster() (string, error) {
+	inClusterConfig, err := rest.InClusterConfig()
+	if err != nil {
+		return "", fmt.Errorf("获取InCluster配置失败: %v", err)
+	}
+
+	// 读取CA证书
+	caData, err := os.ReadFile(inClusterConfig.TLSClientConfig.CAFile)
+	if err != nil {
+		return "", fmt.Errorf("读取CA证书失败: %v", err)
+	}
+
+	// 构建kubeconfig
+	config := api.NewConfig()
+	clusterName := "default-cluster"
+	userName := "in-cluster-user"
+	contextName := "in-cluster-context"
+
+	// 设置集群信息
+	config.Clusters[clusterName] = &api.Cluster{
+		Server:                   inClusterConfig.Host,
+		CertificateAuthorityData: caData,
+	}
+
+	// 设置用户信息（使用token）
+	config.AuthInfos[userName] = &api.AuthInfo{
+		Token: inClusterConfig.BearerToken,
+	}
+
+	// 设置上下文
+	config.Contexts[contextName] = &api.Context{
+		Cluster:  clusterName,
+		AuthInfo: userName,
+	}
+
+	// 设置当前上下文
+	config.CurrentContext = contextName
+
+	// 生成YAML
+	kubeconfigYAML, err := clientcmd.Write(*config)
+	if err != nil {
+		return "", fmt.Errorf("生成kubeconfig失败: %v", err)
+	}
+
+	return string(kubeconfigYAML), nil
+}
+
+// resolveKubeconfig 解析kubeconfig，优先级：
+// 1. 用户传入的kubeconfig
+// 2. InCluster配置（Pod内部运行时）
+// 3. 挂载的管理员kubeconfig文件
 func resolveKubeconfig(userKubeconfig string) (string, error) {
+	// 优先级1: 用户传入的kubeconfig
 	if userKubeconfig != "" {
+		fmt.Printf("🔍 调试信息: 使用用户传入的kubeconfig\n")
 		return userKubeconfig, nil
 	}
 
-	// 使用管理员kubeconfig
+	// 优先级2: 尝试InCluster配置
+	inClusterKubeconfig, err := buildKubeconfigFromInCluster()
+	if err == nil {
+		fmt.Printf("🔍 调试信息: 使用InCluster配置\n")
+		return inClusterKubeconfig, nil
+	}
+	fmt.Printf("🔍 调试信息: InCluster配置不可用 (%v)，尝试挂载的kubeconfig\n", err)
+
+	// 优先级3: 使用挂载的管理员kubeconfig
 	adminKubeconfig, err := getAdminKubeconfig()
 	if err != nil {
-		return "", fmt.Errorf("无法获取管理员kubeconfig: %v", err)
+		return "", fmt.Errorf("无法获取kubeconfig: InCluster不可用且文件挂载失败")
 	}
 
+	fmt.Printf("🔍 调试信息: 使用挂载的管理员kubeconfig\n")
 	return adminKubeconfig, nil
 }
 
